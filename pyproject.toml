@@ -11,7 +11,7 @@ dependencies = [
     "fastapi>=0.141.1",
     "psycopg[binary]>=3.3.4",
     "pydantic-settings>=2.15.0",
-    "sqlalchemy>=2.0.52",
+    "sqlalchemy[asyncio]>=2.0.52",
     "uvicorn[standard]>=0.52.3",
 ]
 
@@ -23,3 +23,7 @@ dev = [
     "pytest-asyncio>=1.4.0",
     "ruff>=0.16.3",
 ]
+
+  [tool.pytest.ini_options]
+  asyncio_mode = "auto"
+  pythonpath = ["."]
