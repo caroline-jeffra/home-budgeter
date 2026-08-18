@@ -9,7 +9,7 @@ class Settings(BaseSettings):
     Fields have no defaults: a missing variable fails at import with a
     validation error naming the field, rather than reaching the driver as None."""
 
-    model_config = SettingsConfigDict(env_file=".env")
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     database_url: str
 
