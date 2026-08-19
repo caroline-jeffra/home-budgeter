@@ -38,7 +38,7 @@ jobs:
         runs-on: ubuntu-latest
         steps:
             - uses: appleboy/ssh-action@v1
-            with:
+              with:
                 host: ${{ secrets.DEPLOY_HOST }}
                 username: deploy
                 key: ${{ secrets.DEPLOY_SSH_KEY }}
