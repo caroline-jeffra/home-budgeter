@@ -20,16 +20,16 @@ jobs:
                     --health-timeout 5s --health-retries 5
                 ports:
                   - 5432:5432
-            steps:
-              - uses: actions/checkout@v4
-              - uses: astral-sh/setup-uv@v5
-                with:
+        steps:
+            - uses: actions/checkout@v4
+            - uses: astral-sh/setup-uv@v5
+              with:
                 enable-cache: true
-              - run: uv sync --locked
-              - run: uv run ruff check .
-              - run: uv run mypy
-              - run: uv run pytest -v
-                env:
+            - run: uv sync --locked
+            - run: uv run ruff check .
+            - run: uv run mypy
+            - run: uv run pytest -v
+              env:
                 DATABASE_URL: postgresql+psycopg://budget:budget@localhost:5432/budget_test
 
     deploy:
