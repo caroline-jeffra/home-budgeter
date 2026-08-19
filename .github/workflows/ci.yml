@@ -1,0 +1,49 @@
+name: CI
+
+on:
+    push:
+        branches: [main]
+    pull_request:
+
+jobs:
+    test:
+        runs-on: ubuntu-latest
+        services: 
+            postgres:
+                image: postgres:16
+                env:
+                    POSTGRES_USER: budget
+                    POSTGRES_PASSWORD: budget
+                    POSTGRES_DB: budget_test
+                options: >-
+                    --health-cmd pg_isready --health-interval 5s
+                    --health-timeout 5s --health-retries 5
+                ports:
+                  - 5432:5432
+            steps:
+              - uses: actions/checkout@v4
+              - uses: astral-sh/setup-uv@v5
+                with:
+                enable-cache: true
+              - run: uv sync --locked
+              - run: uv run ruff check .
+              - run: uv run mypy
+              - run: uv run pytest -v
+                env:
+                DATABASE_URL: postgresql+psycopg://budget:budget@localhost:5432/budget_test
+
+    deploy:
+        needs: test
+        if: github.ref == 'refs/heads/main'
+        runs-on: ubuntu-latest
+        steps:
+            - uses: appleboy/ssh-action@v1
+            with:
+                host: ${{ secrets.DEPLOY_HOST }}
+                username: deploy
+                key: ${{ secrets.DEPLOY_SSH_KEY }}
+                script: |
+                    cd /srv/home-budgeter
+                    git pull --ff-only
+                    docker compose up -d --build
+                    docker image prune -f
