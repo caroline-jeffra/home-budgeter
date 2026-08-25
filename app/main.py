@@ -10,6 +10,7 @@ from app.db import get_session
 
 app = FastAPI(title="Home Budgeter")
 
+
 @app.get("/health")
 async def health_check(session: Annotated[AsyncSession, Depends(get_session)]) -> dict[str, str]:
     """Simple round trip execution to supply database connection health check."""
