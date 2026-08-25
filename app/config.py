@@ -15,4 +15,4 @@ class Settings(BaseSettings):
 
 
 # pydantic fills database url from env at import
-settings = Settings() # type: ignore[call-arg]
+settings = Settings()  # type: ignore[call-arg]
