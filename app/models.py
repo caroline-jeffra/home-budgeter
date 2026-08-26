@@ -45,7 +45,13 @@ class BudgetPeriod(Base):
     period: Mapped[str] = mapped_column(unique=True)
     expected_income_cents: Mapped[int] = mapped_column(BigInteger)
     state: Mapped[PeriodState] = mapped_column(
-        Enum(PeriodState, native_enum=False, name="period_state")
+        Enum(
+            PeriodState,
+            native_enum=False,
+            create_constraint=True,
+            name="period_state",
+            values_callable=lambda e: [m.value for m in e],
+        )
     )
 
 
@@ -72,7 +78,13 @@ class Transaction(Base):
     booked_on: Mapped[date]
     amount_cents: Mapped[int] = mapped_column(BigInteger)
     categorized_by: Mapped[CategorizedBy | None] = mapped_column(
-        Enum(CategorizedBy, native_enum=False, name="categorized_by")
+        Enum(
+            CategorizedBy,
+            native_enum=False,
+            create_constraint=True,
+            name="categorized_by",
+            values_callable=lambda e: [m.value for m in e],
+        )
     )
     description: Mapped[str]
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
