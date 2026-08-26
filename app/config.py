@@ -12,7 +12,8 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     database_url: str
+    api_token: str
 
 
-# pydantic fills database url from env at import
+# pydantic fills database url and api token from env at import
 settings = Settings()  # type: ignore[call-arg]
