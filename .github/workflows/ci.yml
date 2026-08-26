@@ -31,6 +31,7 @@ jobs:
             - run: uv run pytest -v
               env:
                 DATABASE_URL: postgresql+psycopg://budget:budget@localhost:5432/budget_test
+                API_TOKEN: ${{ secrets.API_TOKEN }}
 
     deploy:
         needs: test
