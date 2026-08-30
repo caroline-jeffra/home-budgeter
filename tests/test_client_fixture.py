@@ -44,3 +44,9 @@ async def test_override_is_closed_after_the_client(client: AsyncClient) -> None:
 def test_no_override_leaks_between_tests() -> None:
     """No client fixture here, so nothing may be overridden."""
     assert app.dependency_overrides == {}
+
+
+def test_endpoints_are_registered_on_the_app() -> None:
+    """Both resources are mounted and reachable on the app."""
+    paths = set(app.openapi()["paths"])
+    assert {"/accounts", "/categories"} <= paths
