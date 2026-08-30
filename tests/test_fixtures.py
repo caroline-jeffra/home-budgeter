@@ -29,4 +29,4 @@ async def test_commit_does_not_escape_the_transaction(session: AsyncSession) -> 
     async with engine.connect() as outside:
         visible = await outside.scalar(select(func.count()).select_from(Account))
 
-    assert visible == 0, "commit escaped the test transaction."    
+    assert visible == 0, "commit escaped the test transaction."
