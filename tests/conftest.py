@@ -9,15 +9,19 @@ from pytest_asyncio import fixture
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession
 
 from alembic import command
-from app.db import engine
+from app.db import engine, get_session
 from app.main import app
 
 
 @fixture
-async def client() -> AsyncGenerator[AsyncClient]:
-    """Yields an HTTP client wired to the app, no network."""
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        yield ac
+async def client(session: AsyncSession) -> AsyncGenerator[AsyncClient]:
+    """Yields an HTTP client whose endpoints chare the test's session."""
+    app.dependency_overrides[get_session] = lambda: session
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            yield ac
+    finally:
+        app.dependency_overrides.clear()
 
 
 @fixture(scope="session")
