@@ -36,7 +36,7 @@ pythonpath = ["."]
 testpaths = ["tests"]
 addopts = "-q --strict-markers"
 asyncio_default_fixture_loop_scope = "session"
-env = ["DATABASE_URL=postgresql+psycopg://budget_test:budget_test@localhost:5432/budget_test"]
+env = ["DATABASE_URL=postgresql+psycopg://budget:budget@localhost:5432/budget_test"]
 
 [tool.ruff]
 line-length = 100
