@@ -1,5 +1,7 @@
 """Pydantic schemas for request and response bodies."""
 
+from datetime import date
+
 from pydantic import BaseModel, ConfigDict
 
 
@@ -37,3 +39,26 @@ class CategoryRead(BaseModel):
     name: str
     parent_id: int | None
     is_recurring: bool
+
+
+class TransactionCreate(BaseModel):
+    """Fields accepted when creating a transaction."""
+
+    account_id: int
+    booked_on: date
+    amount_cents: int
+    description: str
+    category_id: int | None = None
+
+
+class TransactionRead(BaseModel):
+    """A transaction as returned to the client."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    account_id: int
+    category_id: int | None
+    booked_on: date
+    amount_cents: int
+    description: str
