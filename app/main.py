@@ -39,10 +39,17 @@ async def health_check(session: Annotated[AsyncSession, Depends(get_session)]) -
 
 @router.post("/accounts", response_model=AccountRead, status_code=201)
 async def create_account(payload: AccountCreate, session: Session) -> Account:
-    """Creates an account."""
+    """Creates an account with unique name and unique IBAN. Duplicates are a 409."""
     account = Account(**payload.model_dump())
     session.add(account)
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError as exc:
+        await session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Account name or IBAN already exists.",
+        ) from exc
     await session.refresh(account)
     return account
 
