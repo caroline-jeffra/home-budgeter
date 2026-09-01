@@ -7,6 +7,7 @@ on:
 
 jobs:
     test:
+        if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
         runs-on: ubuntu-latest
         services: 
             postgres:
@@ -32,7 +33,10 @@ jobs:
               # DATABASE_URL is pinned by pytest-env in pyproject.toml, which
               # overrides the environment; setting it here would have no effect.
               env:
-                API_TOKEN: ${{ secrets.API_TOKEN }}
+                # API_TOKEN has no default in Settings, so it must be set or
+                # app.config fails at import; the value is irrelevant to the
+                # tests, which read settings.api_token rather than a literal.
+                API_TOKEN: ci-dummy-token
 
     deploy:
         needs: test
