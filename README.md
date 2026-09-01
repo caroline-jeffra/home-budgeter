@@ -38,6 +38,23 @@ A number of features are currently out of scope of the core project. These fall 
 - Import profiles: The structure of transaction download can differ from one institution to another, and creating an import profile to select as those transactions are loaded will be a quality of life improvement. Not strictly necessary for the first Milestone as our household banks with a single institution.
 - Rule derivation from corrections: When suggested categories are incorrect, deriving a rule from that correction will be a time saver, making it worth scheduling after Milestone 1 is complete.
 
+## Authentication
+
+This app is single-user by design via a bearer token rather than a permission model. `Authorization: Bearer <API_TOKEN>` is required for every endpoint except `/health`. This will be replaced with a shared household login during Milestone 2. The FastAPI dependency `require_auth` with `auto_error=False` will facilitate a swap to JWT verification within one function without modifying any callers. 
+
+## Data Model
+
+Six tables:
+
+- `accounts` The sources that transactions are imported from. Unique: `name` and `iban`
+- `categories` Spending buckets. Self referencing to support a hierarchy later.
+- `transactions` Belong to an account and express their amounts as an integer number of cents (not a float).
+- `transaction_splits` Assigns portions of a single transaction to different categories in support of making cash withdrawals divisible and categorizable.
+- `budget_periods` A single month's income/outgoing period during which allocations are planned.
+- `transfer_matches` Links the two sides of a transfer between owned accounts.
+
+Enum-like columns are `VARCHAR` with a CHECK constraint instead of a native Postgres enum. As a result, adding a value is a migration rather than a type alteration.
+
 ## Running the project
 
 **Prerequisites**
@@ -87,6 +104,14 @@ Spin up the project in Docker
 ```bash
 docker compose up -d db
 ```
+
+Make a local test config
+
+```bash
+cp .env.test.example .env.test
+```
+
+Set the same `POSTGRES_PASSWORD` you used above. This and `tests/__init__.py` keep the test suite pointed at `budget_test` instead of your development data.
 
 Finally run the tests and code checks
 
