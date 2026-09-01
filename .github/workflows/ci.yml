@@ -9,7 +9,7 @@ jobs:
     test:
         if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
         runs-on: ubuntu-latest
-        services: 
+        services:
             postgres:
                 image: postgres:16
                 env:
@@ -43,13 +43,35 @@ jobs:
         if: github.ref == 'refs/heads/main'
         runs-on: ubuntu-latest
         steps:
-            - uses: appleboy/ssh-action@v1
-              with:
+          - uses: appleboy/ssh-action@v1
+            env:
+                API_TOKEN: ${{ secrets.API_TOKEN }}
+                BASE_URL: ${{ vars.BASE_URL }}
+            with:
+                envs: API_TOKEN,BASE_URL
                 host: ${{ secrets.DEPLOY_HOST }}
                 username: deploy
                 key: ${{ secrets.DEPLOY_SSH_KEY }}
                 script: |
+                    set -euo pipefail
                     cd /srv/home-budgeter
                     git pull --ff-only
-                    docker compose up -d --build
+                    docker compose build
+                    docker compose run --rm api alembic upgrade head
+                    docker compose up -d
                     docker image prune -f
+                    [ -n "$BASE_URL" ] || { echo "FAIL: BASE_URL is empty - is the repo variable set?"; exit 1; }
+                    code=""
+                    for i in $(seq 1 30); do
+                        code=$(curl -s -o /dev/null -w '%{http_code}' "$BASE_URL/health") && [ "$code" = "200" ] && break
+                        echo "health: $code (attempt $i)"; sleep 2
+                    done
+                    [ "$code" = "200" ] || { echo "FAIL: /health never returned 200"; exit 1; }
+
+                    code=$(curl -s -o /dev/null -w '%{http_code}' "$BASE_URL/accounts")
+                    [ "$code" = "401" ] || { echo "FAIL: unauthenticated /accounts gave $code, want 401"; exit 1; }
+
+                    code=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $API_TOKEN" "$BASE_URL/accounts")
+                    [ "$code" = "200" ] || { echo "FAIL: authenticated /accounts gave $code, want 200"; exit 1; }
+
+                    echo "gate: all three checks passed"
