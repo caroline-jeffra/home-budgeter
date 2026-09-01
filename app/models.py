@@ -56,13 +56,16 @@ class BudgetPeriod(Base):
 
 
 class Account(Base):
-    """An account from which transaction data was imported."""
+    """An account from which transaction data was imported.
+
+    `name` and `iban` are each unique. `iban` is nullable, but NULLs are
+    distinct under a unique constraint."""
 
     __tablename__ = "accounts"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    name: Mapped[str]
-    iban: Mapped[str | None]
+    name: Mapped[str] = mapped_column(unique=True)
+    iban: Mapped[str | None] = mapped_column(unique=True)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=func.now())
 
