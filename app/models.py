@@ -57,7 +57,7 @@ class BudgetPeriod(Base):
 
 class Account(Base):
     """An account from which transaction data was imported.
-    
+
     `name` and `iban` are each unique. `iban` is nullable, but NULLs are
     distinct under a unique constraint."""
 
