@@ -29,6 +29,16 @@ jobs:
             - run: uv sync --locked
             - run: uv run ruff check .
             - run: uv run mypy
+              # `alembic check` compares the metadata against the migrated database
+              # so the upgrade must happen first. Runs before pytest as session
+              # fixture downgrades to base on teardown.
+            - name: Check for undeclared schema drift
+              run: |
+                uv run alembic upgrade head
+                uv run alembic check
+                uv run alembic downgrade base
+              env:
+                DATABASE_URL: postgresql+psycopg://budget:budget@localhost:5432/budget_test
             - run: uv run pytest -v
               # DATABASE_URL is pinned by pytest-env in pyproject.toml, which
               # overrides the environment; setting it here would have no effect.
