@@ -39,6 +39,7 @@ jobs:
                 uv run alembic downgrade base
               env:
                 DATABASE_URL: postgresql+psycopg://budget:budget@localhost:5432/budget_test
+                API_TOKEN: ci-dummy-token
             - run: uv run pytest -v
               # DATABASE_URL is pinned by pytest-env in pyproject.toml, which
               # overrides the environment; setting it here would have no effect.
