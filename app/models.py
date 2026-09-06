@@ -59,12 +59,14 @@ class Account(Base):
     """An account from which transaction data was imported.
 
     `name` and `iban` are each unique. `iban` is nullable, but NULLs are
-    distinct under a unique constraint."""
+    distinct under a unique constraint.
+    `bank_name` selects the import profile in `app.ingest`."""
 
     __tablename__ = "accounts"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(unique=True)
+    bank_name: Mapped[str]
     iban: Mapped[str | None] = mapped_column(unique=True)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=func.now())
@@ -74,12 +76,16 @@ class Transaction(Base):
     """One transaction derived from a bank or credit card CSV import."""
 
     __tablename__ = "transactions"
+    __table_args__ = (
+        UniqueConstraint("account_id", "balance_after_cents", "amount_cents"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id"))
     category_id: Mapped[int | None] = mapped_column(ForeignKey("categories.id"))
     booked_on: Mapped[date]
     amount_cents: Mapped[int] = mapped_column(BigInteger)
+    balance_after_cents: Mapped[int | None] = mapped_column(BigInteger)
     categorized_by: Mapped[CategorizedBy | None] = mapped_column(
         Enum(
             CategorizedBy,
