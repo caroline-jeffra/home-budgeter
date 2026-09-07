@@ -9,6 +9,7 @@ class AccountCreate(BaseModel):
     """Fields accepted when creating an account."""
 
     name: str
+    bank_name: str
     iban: str | None = None
 
 
@@ -19,6 +20,7 @@ class AccountRead(BaseModel):
 
     id: int
     name: str
+    bank_name: str
     iban: str | None
 
 

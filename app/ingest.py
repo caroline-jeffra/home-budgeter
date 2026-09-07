@@ -12,9 +12,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import Account, Transaction
 
 
-def _cents_decimal_comma(raw: str) -> int:
-    """Convert an amount like '1234,56' to 123456."""
-    return int(Decimal(raw.strip().replace(",", ".")) * 100)
+def _cents_decimal_point(raw: str) -> int:
+    """Convert an amount like '1234.56' to 123456."""
+    return int(Decimal(raw.strip()) * 100)
 
 
 def _date_yyyymmdd(raw: str) -> date:
@@ -39,14 +39,14 @@ class ImportProfile:
 
 ABN_AMRO = ImportProfile(
     name="ABN AMRO",
-    delimiter="\t",
-    has_header=False,
+    delimiter=",",
+    has_header=True,
     booked_on=2,
     amount=6,
     balance_after=5,
     description=7,
     parse_date=_date_yyyymmdd,
-    parse_amount=_cents_decimal_comma,
+    parse_amount=_cents_decimal_point,
 )
 
 PROFILES: dict[str, ImportProfile] = {"abn_amro": ABN_AMRO}
@@ -144,7 +144,7 @@ async def import_rows(
     if profile.balance_after is None:
         raise NotImplementedError(
             f"{profile.name} exports no running balance; dedup Path 2 "
-            "(content hash + occurrence) is designed but not build."
+            "(content hash + occurrence) is designed but not built."
         )
 
     rows = list(normalize(parse(lines, profile)))
