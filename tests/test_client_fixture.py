@@ -28,7 +28,7 @@ app.include_router(probe_router)
 
 async def test_client_shares_the_test_session(client: AsyncClient, session: AsyncSession) -> None:
     """An uncommitted write must be visible to the endpoint, a shared session can see it."""
-    session.add(Account(name="Sharing probe"))
+    session.add(Account(name="Sharing probe", bank_name="example bank"))
     await session.flush()
 
     result = await client.get("/_session_probe")
