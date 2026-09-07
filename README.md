@@ -1,4 +1,6 @@
 # Home Budgeter
+[![CI](https://github.com/caroline-jeffra/home-budgeter/actions/workflows/ci.yml/badge.svg)](https://github.com/caroline-jeffra/home-budgeter/actions/workflows/ci.yml)
+![Python](https://img.shields.io/badge/python-3.13-blue)
 
 **Stack**
 
