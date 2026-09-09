@@ -1,9 +1,11 @@
 import asyncio
 from logging.config import fileConfig
 
+from alembic.runtime.environment import NameFilterType
 from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
+from sqlalchemy.sql.schema import SchemaItem
 
 from alembic import context
 from app.config import settings
@@ -28,7 +30,13 @@ target_metadata = Base.metadata
 # ... etc.
 
 
-def include_object(object_, name, type_, reflected, compare_to):
+def include_object(
+    object_: SchemaItem,
+    name: str | None,
+    type_: NameFilterType,
+    reflected: bool,
+    compare_to: SchemaItem | None
+    ) -> bool:
     """Filter what autogenerates compares."""
     if type_ == "table" and name == "alembic_version":
         return False
