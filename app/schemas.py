@@ -64,3 +64,12 @@ class TransactionRead(BaseModel):
     booked_on: date
     amount_cents: int
     description: str
+
+
+class ImportResult(BaseModel):
+    """The outcome of a CSV import."""
+
+    account_id: int
+    rows_read: int
+    inserted: int
+    skipped: int

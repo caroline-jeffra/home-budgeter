@@ -53,6 +53,14 @@ PROFILES: dict[str, ImportProfile] = {"abn_amro": ABN_AMRO}
 
 
 @dataclass(frozen=True)
+class ImportSummary:
+    """How many rows a file held, and how many were new."""
+
+    rows_read: int
+    inserted: int
+
+
+@dataclass(frozen=True)
 class ParsedRow:
     """One transaction parsed from a CSV, before it becomes a Transaction."""
 
@@ -134,7 +142,7 @@ async def import_rows(
     account: Account,
     lines: Iterable[str],
     batch_size: int = 500,
-) -> int:
+) -> ImportSummary:
     """Import transactions for one account, returning the number inserted."""
     profile = PROFILES.get(account.bank_name)
     if profile is None:
@@ -149,7 +157,7 @@ async def import_rows(
 
     rows = list(normalize(parse(lines, profile)))
     if not rows:
-        return 0
+        return ImportSummary(rows_read=0, inserted=0)
 
     start = min(row.booked_on for row in rows)
     end = max(row.booked_on for row in rows)
@@ -171,4 +179,4 @@ async def import_rows(
             await session.flush()
 
     await session.flush()
-    return inserted
+    return ImportSummary(rows_read=len(rows), inserted=inserted)

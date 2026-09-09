@@ -4,19 +4,21 @@ from collections.abc import Sequence
 from datetime import date
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, status
+from fastapi import APIRouter, Depends, FastAPI, File, HTTPException, Query, UploadFile, status
 from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import require_auth
 from app.db import get_session
+from app.ingest import import_rows
 from app.models import Account, Category, Transaction, TransactionSplit
 from app.schemas import (
     AccountCreate,
     AccountRead,
     CategoryCreate,
     CategoryRead,
+    ImportResult,
     TransactionCreate,
     TransactionRead,
 )
@@ -28,6 +30,8 @@ router = APIRouter(dependencies=[Depends(require_auth)])
 app.include_router(router)
 
 Session = Annotated[AsyncSession, Depends(get_session)]
+
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 
 
 @app.get("/health")
@@ -59,6 +63,72 @@ async def list_accounts(session: Session) -> Sequence[Account]:
     """Lists all accounts, oldest first."""
     result = await session.scalars(select(Account).order_by(Account.id))
     return result.all()
+
+
+async def _read_bounded(file: UploadFile, limit: int | None = None) -> bytes:
+    """Reads an upload in chunks, rejecting anything past `limit`."""
+    limit = limit or MAX_UPLOAD_BYTES
+    chunks: list[bytes] = []
+    total = 0
+    while chunk := await file.read(64 * 1024):
+        total += len(chunk)
+        if total > limit:
+            raise HTTPException(
+                status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                detail=f"File exceeds the {limit} byte limit.",
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+@router.post(
+    "/accounts/{account_id}/import",
+    response_model=ImportResult,
+    status_code=status.HTTP_200_OK,
+)
+async def import_transactions(
+    account_id: int,
+    session: Session,
+    file: Annotated[UploadFile, File()],
+) -> ImportResult:
+    """Imports a bank CSV for one account. Re-importing the same file inserts nothing."""
+    account = await session.get(Account, account_id)
+    if account is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No account with id {account_id}",
+        )
+
+    raw = await _read_bounded(file)
+
+    try:
+        text_body = raw.decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="File is not valid UTF-8",
+        ) from exc
+
+    try:
+        summary = await import_rows(session, account, text_body.splitlines())
+    except NotImplementedError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=str(exc),
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(exc),
+        ) from exc
+
+    await session.commit()
+    return ImportResult(
+        account_id=account.id,
+        rows_read=summary.rows_read,
+        inserted=summary.inserted,
+        skipped=summary.rows_read - summary.inserted,
+    )
 
 
 @router.post("/categories", response_model=CategoryRead, status_code=201)
