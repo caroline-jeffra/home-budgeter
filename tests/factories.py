@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import (
     Account,
+    BankName,
     BudgetPeriod,
     Category,
     PeriodState,
@@ -23,7 +24,7 @@ async def make_account(session: AsyncSession, **kwargs: Any) -> Account:
     """Builds an account. `iban` is nullable and left unset."""
     account = Account(**{
         "name": f"Account {next(_counter)}",
-        "bank_name": "example bank",
+        "bank_name": BankName.ABN_AMRO,
         **kwargs
     })
     session.add(account)

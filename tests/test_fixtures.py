@@ -4,12 +4,12 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import engine
-from app.models import Account
+from app.models import Account, BankName
 
 
 async def test_write_a_row(session: AsyncSession) -> None:
     """Writes a row and commits it. The commit must not escape the test."""
-    session.add(Account(name="Rollback probe", bank_name="example bank"))
+    session.add(Account(name="Rollback probe", bank_name=BankName.ABN_AMRO))
     await session.commit()
     count = await session.scalar(select(func.count()).select_from(Account))
     assert count == 1
@@ -23,7 +23,7 @@ async def test_previous_row_is_gone(session: AsyncSession) -> None:
 
 async def test_commit_does_not_escape_the_transaction(session: AsyncSession) -> None:
     """A commit inside a test must stay invisible to any other connection."""
-    session.add(Account(name="Escape probe", bank_name="example_bank"))
+    session.add(Account(name="Escape probe", bank_name=BankName.ABN_AMRO))
     await session.commit()
 
     async with engine.connect() as outside:
