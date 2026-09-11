@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_session
 from app.main import app
-from app.models import Account
+from app.models import Account, BankName
 
 probe_router = APIRouter()
 
@@ -28,7 +28,7 @@ app.include_router(probe_router)
 
 async def test_client_shares_the_test_session(client: AsyncClient, session: AsyncSession) -> None:
     """An uncommitted write must be visible to the endpoint, a shared session can see it."""
-    session.add(Account(name="Sharing probe", bank_name="example bank"))
+    session.add(Account(name="Sharing probe", bank_name=BankName.ABN_AMRO))
     await session.flush()
 
     result = await client.get("/_session_probe")
