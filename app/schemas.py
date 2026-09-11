@@ -4,12 +4,14 @@ from datetime import date
 
 from pydantic import BaseModel, ConfigDict
 
+from app.models import BankName
+
 
 class AccountCreate(BaseModel):
     """Fields accepted when creating an account."""
 
     name: str
-    bank_name: str
+    bank_name: BankName
     iban: str | None = None
 
 
@@ -20,7 +22,7 @@ class AccountRead(BaseModel):
 
     id: int
     name: str
-    bank_name: str
+    bank_name: BankName
     iban: str | None
 
 

@@ -127,12 +127,6 @@ async def test_overlapping_ranges_import_only_new_rows(
     assert {t.amount_cents for t in stored} == {-655, 15000}
 
 
-async def test_unknown_bank_name_raises(session: AsyncSession) -> None:
-    account = await make_account(session)
-    with pytest.raises(ValueError, match="example bank"):
-        await import_rows(session, account, TWO_ROWS)
-
-
 async def test_import_endpoint_inserts_rows(
     client: AsyncClient, session: AsyncSession
 ) -> None:
@@ -203,21 +197,6 @@ async def test_import_unknown_account_is_404(client: AsyncClient) -> None:
     )
 
     assert response.status_code == 404
-
-
-async def test_import_unknown_bank_is_422(
-    client: AsyncClient, session: AsyncSession
-) -> None:
-    """An account whose bank has no import profile is a 422, not a crash."""
-    account = await make_account(session)
-
-    response = await client.post(
-        f"/accounts/{account.id}/import",
-        files=_csv_upload(TWO_ROWS),
-        headers=AUTH,
-    )
-
-    assert response.status_code == 422
 
 
 async def test_import_malformed_row_persists_nothing(

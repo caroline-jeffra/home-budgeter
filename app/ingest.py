@@ -9,7 +9,7 @@ from decimal import Decimal, InvalidOperation
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Account, Transaction
+from app.models import Account, BankName, Transaction
 
 
 def _cents_decimal_point(raw: str) -> int:
@@ -49,8 +49,11 @@ ABN_AMRO = ImportProfile(
     parse_amount=_cents_decimal_point,
 )
 
-PROFILES: dict[str, ImportProfile] = {"abn_amro": ABN_AMRO}
-
+PROFILES: dict[BankName, ImportProfile] = {BankName.ABN_AMRO: ABN_AMRO}
+if set(PROFILES) != set(BankName):
+      raise RuntimeError(
+          f"BankName members without an ImportProfile: {set(BankName) - set(PROFILES)}"
+        )
 
 @dataclass(frozen=True)
 class ImportSummary:
@@ -144,11 +147,8 @@ async def import_rows(
     batch_size: int = 500,
 ) -> ImportSummary:
     """Import transactions for one account, returning the number inserted."""
-    profile = PROFILES.get(account.bank_name)
-    if profile is None:
-        raise ValueError(
-            f"no import profile for bank {account.bank_name!r}; known profiles: {sorted(PROFILES)}"
-        )
+    profile = PROFILES[BankName(account.bank_name)]
+
     if profile.balance_after is None:
         raise NotImplementedError(
             f"{profile.name} exports no running balance; dedup Path 2 "
