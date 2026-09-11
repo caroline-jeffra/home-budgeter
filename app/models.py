@@ -36,6 +36,12 @@ class CategorizedBy(enum.StrEnum):
     RULE = "rule"
 
 
+class BankName(enum.StrEnum):
+    """Banks with an import profile. The value is the stored `accounts.bank_name`."""
+
+    ABN_AMRO = "abn_amro"
+
+
 class BudgetPeriod(Base):
     """A budget period, identified by its month/year."""
 
@@ -66,7 +72,15 @@ class Account(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(unique=True)
-    bank_name: Mapped[str]
+    bank_name: Mapped[BankName] = mapped_column(
+        Enum(
+            BankName,
+            native_enum=False,
+            create_constraint=True,
+            name="bank_name",
+            values_callable=lambda e: [m.value for m in e],
+        )
+    )
     iban: Mapped[str | None] = mapped_column(unique=True)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=func.now())
