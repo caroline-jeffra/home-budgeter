@@ -86,6 +86,12 @@ Generate a password for Postgres and set it in the .env as `POSTGRES_PASSWORD` a
 openssl rand -hex 32 
 ```
 
+Generate a second value for `API_TOKEN` and set it in the .env. Every endpoint except `/health` requires it as `Authorization: Bearer <API_TOKEN>`, and the tests authenticate with the same variable, so leaving it empty fails the authenticated tests with a 401.
+
+```bash
+openssl rand -hex 32
+```
+
 Create a local override for Docker's database ports
 
 ```bash
@@ -107,6 +113,12 @@ Spin up the project in Docker
 docker compose up -d db
 ```
 
+Apply the migrations to the development database. Nothing migrates on startup, so this is needed on a fresh machine and after any pull that adds a migration.
+
+```bash
+uv run alembic upgrade head
+```
+
 Make a local test config
 
 ```bash
@@ -114,6 +126,12 @@ cp .env.test.example .env.test
 ```
 
 Set the same `POSTGRES_PASSWORD` you used above. This and `tests/__init__.py` keep the test suite pointed at `budget_test` instead of your development data.
+
+Create the test database. Compose only creates `budget`, so `budget_test` is made once per machine; the suite builds and tears down its schema with Alembic on every run.
+
+```bash
+docker compose exec db psql -U budget -d postgres -c 'CREATE DATABASE budget_test OWNER budget;'
+```
 
 Finally run the tests and code checks
 
