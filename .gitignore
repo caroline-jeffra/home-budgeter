@@ -8,3 +8,6 @@ __pycache__/
 .ruff_cache/
 .DS_Store
 docker-compose.override.yml
+*.csv
+!tests/**/*.csv
+exports/
