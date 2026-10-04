@@ -31,6 +31,7 @@ class ImportProfile:
     has_header: bool
     booked_on: int
     amount: int
+    balance_before: int | None
     balance_after: int | None
     description: int
     parse_date: Callable[[str], date]
@@ -43,6 +44,7 @@ ABN_AMRO = ImportProfile(
     has_header=True,
     booked_on=2,
     amount=6,
+    balance_before=4,
     balance_after=5,
     description=7,
     parse_date=_date_yyyymmdd,
@@ -83,6 +85,8 @@ def parse(lines: Iterable[str], profile: ImportProfile) -> Iterator[ParsedRow]:
     reader = csv.reader(lines, delimiter=profile.delimiter)
 
     indices = [profile.booked_on, profile.amount, profile.description]
+    if profile.balance_before is not None:
+        indices.append(profile.balance_before)
     if profile.balance_after is not None:
         indices.append(profile.balance_after)
     required = max(indices) + 1
@@ -97,7 +101,7 @@ def parse(lines: Iterable[str], profile: ImportProfile) -> Iterator[ParsedRow]:
                 f"line {lineno}: expected at least {required} columns, got {len(fields)}"
             )
         try:
-            yield ParsedRow(
+            row = ParsedRow(
                 booked_on=profile.parse_date(fields[profile.booked_on]),
                 amount_cents=profile.parse_amount(fields[profile.amount]),
                 balance_after_cents=(
@@ -107,8 +111,23 @@ def parse(lines: Iterable[str], profile: ImportProfile) -> Iterator[ParsedRow]:
                 ),
                 description=fields[profile.description],
             )
+            balance_before = (
+                None
+                if profile.balance_before is None
+                else profile.parse_amount(fields[profile.balance_before])
+            )
         except (ValueError, InvalidOperation) as exc:
             raise ValueError(f"line {lineno}: {exc!r} in {fields!r}") from exc
+        if (
+            balance_before is not None
+            and row.balance_after_cents is not None
+            and balance_before + row.amount_cents != row.balance_after_cents
+        ):
+            raise ValueError(
+                f"line {lineno}: startsaldo {balance_before} + amount "
+                f"{row.amount_cents} != endsaldo {row.balance_after_cents}"
+            )
+        yield row
 
 
 def normalize(rows: Iterator[ParsedRow]) -> Iterator[ParsedRow]:
