@@ -60,6 +60,13 @@ def test_parse_reads_a_quoted_row() -> None:
     assert "PAS410" in row.description
 
 
+def test_parse_rejects_a_broken_balance() -> None:
+    """A row whose startsaldo + amount != endsaldo fails at parse time."""
+    broken = BEA_LINE.replace("190.60", "190.61")
+    with pytest.raises(ValueError, match=r"line 2.*endsaldo"):
+        list(parse([HEADER, broken], ABN_AMRO))
+
+
 def test_parse_rejects_a_short_row() -> None:
     with pytest.raises(ValueError, match="line 2"):
         list(parse([HEADER, "12345678,EUR,20260807"], ABN_AMRO))
