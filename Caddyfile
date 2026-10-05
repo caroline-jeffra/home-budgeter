@@ -1,3 +1,6 @@
 budget.campolo-jeffra.com {
+    request_body {
+        max_size 11MiB
+    }
     reverse_proxy api:8000
 }
