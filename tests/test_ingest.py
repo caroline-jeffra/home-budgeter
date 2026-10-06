@@ -90,9 +90,9 @@ def test_normalize_collapses_whitespace() -> None:
 
 
 def test_dedup_drops_known_and_in_file_duplicates() -> None:
-    a = ParsedRow(date(2026, 8, 7), -655, 19060, "a")
-    b = ParsedRow(date(2026, 8, 7), -2790, 16270, "b")
-    a_again = ParsedRow(date(2026, 8, 7), -655, 19060, "a restated")
+    a = ParsedRow(date(2026, 8, 7), -655, 19060, "a", "a")
+    b = ParsedRow(date(2026, 8, 7), -2790, 16270, "b", "b" )
+    a_again = ParsedRow(date(2026, 8, 7), -655, 19060, "a restated", "a restated")
 
     kept = list(dedup(iter([a, b, a_again]), {b.dedup_key}))
 

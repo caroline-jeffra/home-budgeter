@@ -6,6 +6,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ingest import NORMALIZER_VERSION
 from app.models import (
     Account,
     BankName,
@@ -64,12 +65,15 @@ async def make_transaction(
     transaction should not claim to have been categorized."""
     if account is None:
         account = await make_account(session)
+    n = next(_counter)
     transaction = Transaction(
         **{
             "account_id": account.id,
             "booked_on": date(2026, 1, 15),
             "amount_cents": -1_250,
-            "description": f"Transaction {next(_counter)}",
+            "description": f"Transaction {n}",
+            "raw_description": f"Transaction {n}",
+            "normalizer_version": NORMALIZER_VERSION,
             **kwargs,
         }
     )

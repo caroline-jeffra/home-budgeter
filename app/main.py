@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import require_auth
 from app.db import get_session
-from app.ingest import import_rows
+from app.ingest import NORMALIZER_VERSION, import_rows
 from app.models import Account, Category, Transaction, TransactionSplit
 from app.schemas import (
     AccountCreate,
@@ -158,7 +158,11 @@ async def list_categories(session: Session) -> Sequence[Category]:
 @router.post("/transactions", response_model=TransactionRead, status_code=201)
 async def create_transaction(payload: TransactionCreate, session: Session) -> Transaction:
     """Creates a transaction and its single full-amount split in one unit of work."""
-    transaction = Transaction(**payload.model_dump())
+    transaction = Transaction(
+        **payload.model_dump(),
+        raw_description=payload.description,
+        normalizer_version=NORMALIZER_VERSION,
+    )
     session.add(transaction)
     try:
         await session.flush()
