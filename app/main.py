@@ -1,5 +1,6 @@
 """FastAPI application and route definitions."""
 
+import hashlib
 from collections.abc import Sequence
 from datetime import date
 from typing import Annotated
@@ -12,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth import require_auth
 from app.db import get_session
 from app.ingest import NORMALIZER_VERSION, import_rows
-from app.models import Account, Category, Transaction, TransactionSplit
+from app.models import Account, Category, ImportBatch, Transaction, TransactionSplit
 from app.schemas import (
     AccountCreate,
     AccountRead,
@@ -91,7 +92,7 @@ async def import_transactions(
     session: Session,
     file: Annotated[UploadFile, File()],
 ) -> ImportResult:
-    """Imports a bank CSV for one account. Re-importing the same file inserts nothing."""
+    """Imports a bank CSV for one account. Re-importing the same file returns its original batch."""
     account = await session.get(Account, account_id)
     if account is None:
         raise HTTPException(
@@ -101,6 +102,23 @@ async def import_transactions(
 
     raw = await _read_bounded(file)
 
+    file_sha256 = hashlib.sha256(raw).hexdigest()
+    existing = await session.scalar(
+        select(ImportBatch).where(
+            ImportBatch.account_id == account.id,
+            ImportBatch.file_sha256 == file_sha256
+        )
+    )
+    if existing is not None:
+        return ImportResult(
+            account_id=account.id,
+            rows_read=existing.rows_read,
+            inserted=existing.inserted,
+            skipped=existing.skipped,
+            batch_id=existing.id,
+            already_imported=True,
+        )
+
     try:
         text_body = raw.decode("utf-8-sig")
     except UnicodeDecodeError as exc:
@@ -109,8 +127,32 @@ async def import_transactions(
             detail="File is not valid UTF-8",
         ) from exc
 
+    batch = ImportBatch(
+        account_id=account.id,
+        filename=file.filename or "",
+        size=len(raw),
+        file_sha256=file_sha256,
+        raw_bytes=raw,
+        bank_profile=account.bank_name,
+        normalizer_version=NORMALIZER_VERSION,
+        rows_read=0,
+        inserted=0,
+        skipped=0,
+    )
+    session.add(batch)
     try:
-        summary = await import_rows(session, account, text_body.splitlines())
+        await session.flush()
+    except IntegrityError as exc:
+        await session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This file is already being imported.",
+        ) from exc
+
+    try:
+        summary = await import_rows(
+            session, account, text_body.splitlines(), import_batch_id=batch.id
+        )
     except NotImplementedError as exc:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -122,12 +164,17 @@ async def import_transactions(
             detail=str(exc),
         ) from exc
 
+    batch.rows_read = summary.rows_read
+    batch.inserted = summary.inserted
+    batch.skipped = summary.rows_read - summary.inserted
     await session.commit()
     return ImportResult(
         account_id=account.id,
-        rows_read=summary.rows_read,
-        inserted=summary.inserted,
-        skipped=summary.rows_read - summary.inserted,
+        rows_read=batch.rows_read,
+        inserted=batch.inserted,
+        skipped=batch.skipped,
+        batch_id=batch.id,
+        already_imported=False,
     )
 
 

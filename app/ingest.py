@@ -168,6 +168,7 @@ async def import_rows(
     session: AsyncSession,
     account: Account,
     lines: Iterable[str],
+    import_batch_id: int,
     batch_size: int = 500,
 ) -> ImportSummary:
     """Import transactions for one account, returning the number inserted."""
@@ -198,6 +199,7 @@ async def import_rows(
                 description=row.description,
                 raw_description=row.raw_description,
                 normalizer_version=NORMALIZER_VERSION,
+                import_batch_id=import_batch_id,
             )
         )
         inserted += 1
