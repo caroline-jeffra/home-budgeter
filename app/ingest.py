@@ -1,6 +1,7 @@
 """CSV ingestion: a lazy pipeline to parse, normalize, dedup then persist."""
 
 import csv
+import unicodedata
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, replace
 from datetime import date, datetime
@@ -135,10 +136,16 @@ def parse(lines: Iterable[str], profile: ImportProfile) -> Iterator[ParsedRow]:
 NORMALIZER_VERSION = 0
 
 
+def normalize_text(text: str) -> str:
+    """Casefold, compose to NFC, then collapse whitespace."""
+    folded = unicodedata.normalize("NFC", text.casefold())
+    return " ".join(folded.split())
+
+
 def normalize(rows: Iterator[ParsedRow]) -> Iterator[ParsedRow]:
-    """Collapse whitespace in descriptions."""
+    """Normalize each row's description from its raw text."""
     for row in rows:
-        yield replace(row, description=" ".join(row.description.split()))
+        yield replace(row, description=normalize_text(row.raw_description))
 
 
 def dedup(rows: Iterator[ParsedRow], existing: set[tuple[int | None, int]]) -> Iterator[ParsedRow]:
