@@ -75,3 +75,5 @@ class ImportResult(BaseModel):
     rows_read: int
     inserted: int
     skipped: int
+    batch_id: int
+    already_imported: bool

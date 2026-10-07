@@ -1,7 +1,9 @@
 """Tests for the CSV ingestion pipeline: parse, normalize, dedup, persist."""
 
+import hashlib
 import io
 from datetime import date
+from unittest.mock import ANY
 
 import pytest
 from httpx import AsyncClient
@@ -19,8 +21,8 @@ from app.ingest import (
     normalize,
     parse,
 )
-from app.models import Transaction
-from tests.factories import make_account
+from app.models import ImportBatch, Transaction
+from tests.factories import make_account, make_import_batch
 
 AUTH = {"Authorization": f"Bearer {settings.api_token}"}
 
@@ -90,9 +92,9 @@ def test_normalize_collapses_whitespace() -> None:
 
 
 def test_dedup_drops_known_and_in_file_duplicates() -> None:
-    a = ParsedRow(date(2026, 8, 7), -655, 19060, "a")
-    b = ParsedRow(date(2026, 8, 7), -2790, 16270, "b")
-    a_again = ParsedRow(date(2026, 8, 7), -655, 19060, "a restated")
+    a = ParsedRow(date(2026, 8, 7), -655, 19060, "a", "a")
+    b = ParsedRow(date(2026, 8, 7), -2790, 16270, "b", "b" )
+    a_again = ParsedRow(date(2026, 8, 7), -655, 19060, "a restated", "a restated")
 
     kept = list(dedup(iter([a, b, a_again]), {b.dedup_key}))
 
@@ -101,18 +103,26 @@ def test_dedup_drops_known_and_in_file_duplicates() -> None:
 
 async def test_import_inserts_rows(session: AsyncSession) -> None:
     account = await make_account(session, bank_name="abn_amro")
-    summary = await import_rows(session, account, TWO_ROWS)
+    batch = await make_import_batch(session, account)
+    summary = await import_rows(session, account, TWO_ROWS, import_batch_id=batch.id)
     assert summary == ImportSummary(rows_read=2, inserted=2)
 
     stored = (await session.scalars(select(Transaction))).all()
     assert len(stored) == 2
     assert {t.amount_cents for t in stored} == {-655, 15000}
+    assert {t.import_batch_id for t in stored} == {batch.id}
 
 
 async def test_reimport_is_a_no_op(session: AsyncSession) -> None:
     account = await make_account(session, bank_name="abn_amro")
-    assert await import_rows(session, account, TWO_ROWS) == ImportSummary(rows_read=2, inserted=2)
-    assert await import_rows(session, account, TWO_ROWS) == ImportSummary(rows_read=2, inserted=0)
+    first = await make_import_batch(session, account)
+    second = await make_import_batch(session, account)
+    assert await import_rows(
+        session, account, TWO_ROWS, import_batch_id=first.id
+    ) == ImportSummary(rows_read=2, inserted=2)
+    assert await import_rows(
+        session, account, TWO_ROWS, import_batch_id=second.id
+    ) == ImportSummary(rows_read=2, inserted=0)
 
     count = await session.scalar(select(func.count()).select_from(Transaction))
     assert count == 2
@@ -122,16 +132,23 @@ async def test_overlapping_ranges_import_only_new_rows(
     session: AsyncSession
 ) -> None:
     account = await make_account(session, bank_name="abn_amro")
-    assert await import_rows(session, account, [HEADER, BEA_LINE]) == ImportSummary(
+    first = await make_import_batch(session, account)
+    second = await make_import_batch(session, account)
+    assert await import_rows(
+        session, account, [HEADER, BEA_LINE], import_batch_id=first.id
+    ) == ImportSummary(
         rows_read=1, inserted=1
     )
 
     # Second export overlaps the first: BEA_LINE again, plus one new row.
-    assert await import_rows(session, account, TWO_ROWS) == ImportSummary(rows_read=2, inserted=1)
+    assert await import_rows(
+        session, account, TWO_ROWS, import_batch_id=second.id
+    ) == ImportSummary(rows_read=2, inserted=1)
 
     stored = (await session.scalars(select(Transaction))).all()
     assert len(stored) == 2
     assert {t.amount_cents for t in stored} == {-655, 15000}
+    assert {t.import_batch_id for t in stored} == {first.id, second.id}
 
 
 async def test_import_endpoint_inserts_rows(
@@ -152,6 +169,8 @@ async def test_import_endpoint_inserts_rows(
         "rows_read": 2,
         "inserted": 2,
         "skipped": 0,
+        "batch_id": ANY,
+        "already_imported": False,
     }
 
     count = await session.scalar(
@@ -165,7 +184,7 @@ async def test_import_endpoint_inserts_rows(
 async def test_import_endpoint_is_idempotent(
     client: AsyncClient, session: AsyncSession
 ) -> None:
-    """Re-importing the same export inserts nothing the second time."""
+    """Re-importing the same file returns the original batch and writes nothing."""
     account = await make_account(session, bank_name="abn_amro")
 
     first = await client.post(
@@ -179,12 +198,14 @@ async def test_import_endpoint_is_idempotent(
         headers=AUTH,
     )
 
-    assert first.json()["inserted"] == 2
+    assert first.json()["already_imported"] is False
     assert second.json() == {
         "account_id": account.id,
         "rows_read": 2,
-        "inserted": 0,
-        "skipped": 2,
+        "inserted": 2,
+        "skipped": 0,
+        "batch_id": first.json()["batch_id"],
+        "already_imported": True,
     }
 
     count = await session.scalar(
@@ -193,6 +214,44 @@ async def test_import_endpoint_is_idempotent(
         )
     )
     assert count == 2
+
+    batches = await session.scalar(select(func.count()).select_from(ImportBatch))
+    assert batches == 1
+
+
+async def test_import_records_a_batch(
+    client: AsyncClient, session: AsyncSession
+) -> None:
+    """A successful import stores the file, its hash and counts,
+    and every inserted row points at the batch"""
+
+    account = await make_account(session, bank_name="abn_amro")
+    body = "\r\n".join(TWO_ROWS).encode("utf-8")
+
+    response = await client.post(
+        f"/accounts/{account.id}/import",
+        files=_csv_upload(TWO_ROWS),
+        headers=AUTH,
+    )
+    batch_id = response.json()["batch_id"]
+
+    batch = await session.get(ImportBatch, batch_id)
+    assert batch is not None
+    assert batch.account_id == account.id
+    assert batch.filename == "export.csv"
+    assert batch.size == len(body)
+    assert batch.file_sha256 == hashlib.sha256(body).hexdigest()
+    assert (batch.rows_read, batch.inserted, batch.skipped) == (2, 2, 0)
+
+    raw_bytes = await session.scalar(
+        select(ImportBatch.raw_bytes).where(ImportBatch.id == batch_id)
+    )
+    assert raw_bytes == body
+
+    batch_ids = await session.scalars(
+        select(Transaction.import_batch_id).where(Transaction.account_id == account.id)
+    )
+    assert set(batch_ids) == {batch_id}
 
 
 async def test_import_unknown_account_is_404(client: AsyncClient) -> None:

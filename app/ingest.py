@@ -73,6 +73,7 @@ class ParsedRow:
     amount_cents: int
     balance_after_cents: int | None
     description: str
+    raw_description: str
 
     @property
     def dedup_key(self) -> tuple[int | None, int]:
@@ -110,6 +111,7 @@ def parse(lines: Iterable[str], profile: ImportProfile) -> Iterator[ParsedRow]:
                     else profile.parse_amount(fields[profile.balance_after])
                 ),
                 description=fields[profile.description],
+                raw_description=fields[profile.description],
             )
             balance_before = (
                 None
@@ -128,6 +130,9 @@ def parse(lines: Iterable[str], profile: ImportProfile) -> Iterator[ParsedRow]:
                 f"{row.amount_cents} != endsaldo {row.balance_after_cents}"
             )
         yield row
+
+
+NORMALIZER_VERSION = 0
 
 
 def normalize(rows: Iterator[ParsedRow]) -> Iterator[ParsedRow]:
@@ -163,6 +168,7 @@ async def import_rows(
     session: AsyncSession,
     account: Account,
     lines: Iterable[str],
+    import_batch_id: int,
     batch_size: int = 500,
 ) -> ImportSummary:
     """Import transactions for one account, returning the number inserted."""
@@ -191,6 +197,9 @@ async def import_rows(
                 amount_cents=row.amount_cents,
                 balance_after_cents=row.balance_after_cents,
                 description=row.description,
+                raw_description=row.raw_description,
+                normalizer_version=NORMALIZER_VERSION,
+                import_batch_id=import_batch_id,
             )
         )
         inserted += 1

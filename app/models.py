@@ -86,6 +86,34 @@ class Account(Base):
     updated_at: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=func.now())
 
 
+class ImportBatch(Base):
+    """One batch of transactions from a bank or credit card imported in a single CSV."""
+
+    __tablename__ = "import_batches"
+    __table_args__ = (UniqueConstraint("account_id", "file_sha256"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id"))
+    filename: Mapped[str]
+    size: Mapped[int]
+    file_sha256: Mapped[str]
+    raw_bytes: Mapped[bytes] = mapped_column(deferred=True)
+    uploaded_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    bank_profile: Mapped[BankName] = mapped_column(
+        Enum(
+            BankName,
+            native_enum=False,
+            create_constraint=True,
+            name="bank_name",
+            values_callable=lambda e: [m.value for m in e],
+        )
+    )
+    normalizer_version: Mapped[int]
+    rows_read: Mapped[int]
+    inserted: Mapped[int]
+    skipped: Mapped[int]
+
+
 class Transaction(Base):
     """One transaction derived from a bank or credit card CSV import."""
 
@@ -110,6 +138,9 @@ class Transaction(Base):
         )
     )
     description: Mapped[str]
+    raw_description: Mapped[str]
+    normalizer_version: Mapped[int]
+    import_batch_id: Mapped[int | None] = mapped_column(ForeignKey("import_batches.id"))
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=func.now())
     splits: Mapped[list["TransactionSplit"]] = relationship(back_populates="transaction")

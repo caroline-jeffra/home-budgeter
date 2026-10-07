@@ -1,16 +1,19 @@
 """Factories for building model rows inside a test's transaction."""
 
+import hashlib
 from datetime import date
 from itertools import count
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ingest import NORMALIZER_VERSION
 from app.models import (
     Account,
     BankName,
     BudgetPeriod,
     Category,
+    ImportBatch,
     PeriodState,
     Transaction,
     TransactionSplit,
@@ -64,18 +67,48 @@ async def make_transaction(
     transaction should not claim to have been categorized."""
     if account is None:
         account = await make_account(session)
+    n = next(_counter)
     transaction = Transaction(
         **{
             "account_id": account.id,
             "booked_on": date(2026, 1, 15),
             "amount_cents": -1_250,
-            "description": f"Transaction {next(_counter)}",
+            "description": f"Transaction {n}",
+            "raw_description": f"Transaction {n}",
+            "normalizer_version": NORMALIZER_VERSION,
             **kwargs,
         }
     )
     session.add(transaction)
     await session.flush()
     return transaction
+
+
+async def make_import_batch(
+    session: AsyncSession, account: Account | None = None, **kwargs: Any
+) -> ImportBatch:
+    """Builds an import batch."""
+    if account is None:
+        account = await make_account(session)
+    n = next(_counter)
+    batch = ImportBatch(
+        **{
+            "account_id": account.id,
+            "filename": f"export={n}.csv",
+            "size": 0,
+            "file_sha256": hashlib.sha256(str(n).encode()).hexdigest(),
+            "raw_bytes": b"",
+            "bank_profile": account.bank_name,
+            "normalizer_version": NORMALIZER_VERSION,
+            "rows_read": 0,
+            "inserted": 0,
+            "skipped": 0,
+            **kwargs,
+        }
+    )
+    session.add(batch)
+    await session.flush()
+    return batch
 
 
 async def make_split(
