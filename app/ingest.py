@@ -134,12 +134,24 @@ def parse(lines: Iterable[str], profile: ImportProfile) -> Iterator[ParsedRow]:
 
 
 NORMALIZER_VERSION = 0
+_SEPARATORS = str.maketrans(",:/", "   ")
+
+NOISE_WORDS = frozenset({
+    # transaction type
+    "bea", "sepa", "trtp", "incasso", "algemeen", "doorlopend", "overboeking", "ideal", "wero",
+    # sepa field labels
+    "naam", "omschrijving", "iban", "bic", "kenmerk", "machtiging", "incassant", "land", "nr",
+    # placeholders
+    "notprovided", "-",
+    # legal form
+    "b.v.", "bv", "nv"
+})
 
 
 def normalize_text(text: str) -> str:
-    """Casefold, compose to NFC, then collapse whitespace."""
-    folded = unicodedata.normalize("NFC", text.casefold())
-    return " ".join(folded.split())
+    """Casefold, compose to NFC, split on , : / then drop noise words."""
+    folded = unicodedata.normalize("NFC", text.casefold()).translate(_SEPARATORS)
+    return " ".join(token for token in folded.split() if token not in NOISE_WORDS)
 
 
 def normalize(rows: Iterator[ParsedRow]) -> Iterator[ParsedRow]:

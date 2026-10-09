@@ -14,6 +14,7 @@ from app import main
 from app.config import settings
 from app.ingest import (
     ABN_AMRO,
+    NOISE_WORDS,
     ImportSummary,
     ParsedRow,
     dedup,
@@ -87,7 +88,7 @@ def test_normalize_collapses_whitespace() -> None:
     (clean,) = normalize(iter([raw]))
     assert "  " not in clean.description
     assert clean.description == (
-        "bea, google pay bck*kiosk hn 2102,pas410 nr:bs011691, 07.08.26/12:17 amsterdam nh"
+        "google pay bck*kiosk hn 2102 pas410 bs011691 07.08.26 12 17 amsterdam nh"
     )
     assert clean.raw_description == raw.raw_description
 
@@ -103,6 +104,22 @@ def test_normalize_text_casefolds_not_lowercases() -> None:
 
 def test_normalize_text_collapses_unicode_whitespace() -> None:
     assert normalize_text("ALBERT\u00a0 HEIJN \t") == "albert heijn"
+
+
+def test_normalize_text_splits_on_separators() -> None:
+    assert normalize_text("HOORN,PAS613 a:b/c") == "hoorn pas613 a b c"
+
+
+def test_normalize_text_drops_noise_words() -> None:
+    assert normalize_text("SEPA Incasso algemeen doorlopend Naam: Vinted") == "vinted"
+
+
+def test_normalize_text_keeps_noise_inside_a_word() -> None:
+    assert normalize_text("Bearing BV") == "bearing"
+
+
+def test_noise_words_are_already_normalized() -> None:
+    assert all(w == w.casefold() and not set(w) & set(",:/") for w in NOISE_WORDS)
 
 
 def test_normalize_reads_raw_description() -> None:
