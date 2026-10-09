@@ -1,6 +1,7 @@
 """CSV ingestion: a lazy pipeline to parse, normalize, dedup then persist."""
 
 import csv
+import re
 import unicodedata
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, replace
@@ -142,16 +143,27 @@ NOISE_WORDS = frozenset({
     # sepa field labels
     "naam", "omschrijving", "iban", "bic", "kenmerk", "machtiging", "incassant", "land", "nr",
     # placeholders
-    "notprovided", "-",
+    "notprovided",
     # legal form
     "b.v.", "bv", "nv"
 })
 
+_LONG_DIGIT_RUN = re.compile(r"\d{4,}")
+
+
+def _is_noise(token: str) -> bool:
+    """True for noise words, letterless tokens, and long digit runs."""
+    return (
+        token in NOISE_WORDS
+        or not any(char.isalpha() for char in token)
+        or _LONG_DIGIT_RUN.search(token) is not None
+    )
+
 
 def normalize_text(text: str) -> str:
-    """Casefold, compose to NFC, split on , : / then drop noise words."""
+    """Casefold, compose to NFC, split on , : / then drop noise tokens."""
     folded = unicodedata.normalize("NFC", text.casefold()).translate(_SEPARATORS)
-    return " ".join(token for token in folded.split() if token not in NOISE_WORDS)
+    return " ".join(token for token in folded.split() if not _is_noise(token))
 
 
 def normalize(rows: Iterator[ParsedRow]) -> Iterator[ParsedRow]:

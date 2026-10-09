@@ -88,7 +88,7 @@ def test_normalize_collapses_whitespace() -> None:
     (clean,) = normalize(iter([raw]))
     assert "  " not in clean.description
     assert clean.description == (
-        "google pay bck*kiosk hn 2102 pas410 bs011691 07.08.26 12 17 amsterdam nh"
+        "google pay bck*kiosk hn pas410 amsterdam nh"
     )
     assert clean.raw_description == raw.raw_description
 
@@ -120,6 +120,22 @@ def test_normalize_text_keeps_noise_inside_a_word() -> None:
 
 def test_noise_words_are_already_normalized() -> None:
     assert all(w == w.casefold() and not set(w) & set(",:/") for w in NOISE_WORDS)
+
+
+def test_normalize_text_drops_tokens_without_letters() -> None:
+    assert normalize_text("Kiosk 07.08.26 12:17 -") == "kiosk"
+
+
+def test_normalize_text_drops_long_digit_runs() -> None:
+    assert normalize_text("NL88ABNA0837494842 Lidl BS011691") == "lidl"
+
+
+def test_normalize_text_keeps_card_numbers() -> None:
+    assert normalize_text("Albert Heijn 2254,PAS490") == "albert heijn pas490"
+
+
+def test_normalize_text_keeps_short_digits_in_words() -> None:
+    assert normalize_text("123inkt.nl 3FM") == "123inkt.nl 3fm"
 
 
 def test_normalize_reads_raw_description() -> None:
