@@ -14,11 +14,13 @@ from app import main
 from app.config import settings
 from app.ingest import (
     ABN_AMRO,
+    NOISE_WORDS,
     ImportSummary,
     ParsedRow,
     dedup,
     import_rows,
     normalize,
+    normalize_text,
     parse,
 )
 from app.models import ImportBatch, Transaction
@@ -86,9 +88,61 @@ def test_normalize_collapses_whitespace() -> None:
     (clean,) = normalize(iter([raw]))
     assert "  " not in clean.description
     assert clean.description == (
-        "BEA, Google Pay BCK*Kiosk HN 2102,PAS410 NR:BS011691, 07.08.26/12:17 AMSTERDAM NH"
+        "google pay bck*kiosk hn pas410 amsterdam nh"
     )
-    assert clean.amount_cents == raw.amount_cents
+    assert clean.raw_description == raw.raw_description
+
+
+def test_normalize_text_composes_to_nfc() -> None:
+    decomposed = "Cafe\u0301"
+    assert normalize_text(decomposed) == "caf\u00e9"
+
+
+def test_normalize_text_casefolds_not_lowercases() -> None:
+    assert normalize_text("STRAßE") == "strasse"
+
+
+def test_normalize_text_collapses_unicode_whitespace() -> None:
+    assert normalize_text("ALBERT\u00a0 HEIJN \t") == "albert heijn"
+
+
+def test_normalize_text_splits_on_separators() -> None:
+    assert normalize_text("HOORN,PAS613 a:b/c") == "hoorn pas613 a b c"
+
+
+def test_normalize_text_drops_noise_words() -> None:
+    assert normalize_text("SEPA Incasso algemeen doorlopend Naam: Vinted") == "vinted"
+
+
+def test_normalize_text_keeps_noise_inside_a_word() -> None:
+    assert normalize_text("Bearing BV") == "bearing"
+
+
+def test_noise_words_are_already_normalized() -> None:
+    assert all(w == w.casefold() and not set(w) & set(",:/") for w in NOISE_WORDS)
+
+
+def test_normalize_text_drops_tokens_without_letters() -> None:
+    assert normalize_text("Kiosk 07.08.26 12:17 -") == "kiosk"
+
+
+def test_normalize_text_drops_long_digit_runs() -> None:
+    assert normalize_text("NL88ABNA0837494842 Lidl BS011691") == "lidl"
+
+
+def test_normalize_text_keeps_card_numbers() -> None:
+    assert normalize_text("Albert Heijn 2254,PAS490") == "albert heijn pas490"
+
+
+def test_normalize_text_keeps_short_digits_in_words() -> None:
+    assert normalize_text("123inkt.nl 3FM") == "123inkt.nl 3fm"
+
+
+def test_normalize_reads_raw_description() -> None:
+    row = ParsedRow(date(2026, 8, 7), -655, 19060, "stale", "Fresh  TEXT")
+    (clean,) = normalize(iter([row]))
+    assert clean.description == "fresh text"
+    assert clean.raw_description == "Fresh  TEXT"
 
 
 def test_dedup_drops_known_and_in_file_duplicates() -> None:

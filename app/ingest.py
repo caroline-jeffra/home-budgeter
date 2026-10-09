@@ -1,6 +1,8 @@
 """CSV ingestion: a lazy pipeline to parse, normalize, dedup then persist."""
 
 import csv
+import re
+import unicodedata
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, replace
 from datetime import date, datetime
@@ -132,13 +134,42 @@ def parse(lines: Iterable[str], profile: ImportProfile) -> Iterator[ParsedRow]:
         yield row
 
 
-NORMALIZER_VERSION = 0
+NORMALIZER_VERSION = 1
+_SEPARATORS = str.maketrans(",:/", "   ")
+
+NOISE_WORDS = frozenset({
+    # transaction type
+    "bea", "sepa", "trtp", "incasso", "algemeen", "doorlopend", "overboeking", "ideal", "wero",
+    # sepa field labels
+    "naam", "omschrijving", "iban", "bic", "kenmerk", "machtiging", "incassant", "land", "nr",
+    # placeholders
+    "notprovided",
+    # legal form
+    "b.v.", "bv", "nv"
+})
+
+_LONG_DIGIT_RUN = re.compile(r"\d{4,}")
+
+
+def _is_noise(token: str) -> bool:
+    """True for noise words, letterless tokens, and long digit runs."""
+    return (
+        token in NOISE_WORDS
+        or not any(char.isalpha() for char in token)
+        or _LONG_DIGIT_RUN.search(token) is not None
+    )
+
+
+def normalize_text(text: str) -> str:
+    """Casefold, compose to NFC, split on , : / then drop noise tokens."""
+    folded = unicodedata.normalize("NFC", text.casefold()).translate(_SEPARATORS)
+    return " ".join(token for token in folded.split() if not _is_noise(token))
 
 
 def normalize(rows: Iterator[ParsedRow]) -> Iterator[ParsedRow]:
-    """Collapse whitespace in descriptions."""
+    """Normalize each row's description from its raw text."""
     for row in rows:
-        yield replace(row, description=" ".join(row.description.split()))
+        yield replace(row, description=normalize_text(row.raw_description))
 
 
 def dedup(rows: Iterator[ParsedRow], existing: set[tuple[int | None, int]]) -> Iterator[ParsedRow]:
