@@ -134,7 +134,7 @@ def parse(lines: Iterable[str], profile: ImportProfile) -> Iterator[ParsedRow]:
         yield row
 
 
-NORMALIZER_VERSION = 0
+NORMALIZER_VERSION = 1
 _SEPARATORS = str.maketrans(",:/", "   ")
 
 NOISE_WORDS = frozenset({
