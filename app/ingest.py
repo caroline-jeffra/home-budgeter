@@ -55,9 +55,10 @@ ABN_AMRO = ImportProfile(
 
 PROFILES: dict[BankName, ImportProfile] = {BankName.ABN_AMRO: ABN_AMRO}
 if set(PROFILES) != set(BankName):
-      raise RuntimeError(
-          f"BankName members without an ImportProfile: {set(BankName) - set(PROFILES)}"
-        )
+    raise RuntimeError(
+        f"BankName members without an ImportProfile: {set(BankName) - set(PROFILES)}"
+    )
+
 
 @dataclass(frozen=True)
 class ImportSummary:
@@ -76,6 +77,8 @@ class ParsedRow:
     balance_after_cents: int | None
     description: str
     raw_description: str
+    balance_before_cents: int | None
+    line_no: int | None
 
     @property
     def dedup_key(self) -> tuple[int | None, int]:
@@ -114,21 +117,22 @@ def parse(lines: Iterable[str], profile: ImportProfile) -> Iterator[ParsedRow]:
                 ),
                 description=fields[profile.description],
                 raw_description=fields[profile.description],
-            )
-            balance_before = (
-                None
-                if profile.balance_before is None
-                else profile.parse_amount(fields[profile.balance_before])
+                balance_before_cents=(
+                    None
+                    if profile.balance_before is None
+                    else profile.parse_amount(fields[profile.balance_before])
+                ),
+                line_no=lineno,
             )
         except (ValueError, InvalidOperation) as exc:
             raise ValueError(f"line {lineno}: {exc!r} in {fields!r}") from exc
         if (
-            balance_before is not None
+            row.balance_before_cents is not None
             and row.balance_after_cents is not None
-            and balance_before + row.amount_cents != row.balance_after_cents
+            and row.balance_before_cents + row.amount_cents != row.balance_after_cents
         ):
             raise ValueError(
-                f"line {lineno}: startsaldo {balance_before} + amount "
+                f"line {lineno}: startsaldo {row.balance_before_cents} + amount "
                 f"{row.amount_cents} != endsaldo {row.balance_after_cents}"
             )
         yield row
@@ -137,16 +141,36 @@ def parse(lines: Iterable[str], profile: ImportProfile) -> Iterator[ParsedRow]:
 NORMALIZER_VERSION = 1
 _SEPARATORS = str.maketrans(",:/", "   ")
 
-NOISE_WORDS = frozenset({
-    # transaction type
-    "bea", "sepa", "trtp", "incasso", "algemeen", "doorlopend", "overboeking", "ideal", "wero",
-    # sepa field labels
-    "naam", "omschrijving", "iban", "bic", "kenmerk", "machtiging", "incassant", "land", "nr",
-    # placeholders
-    "notprovided",
-    # legal form
-    "b.v.", "bv", "nv"
-})
+NOISE_WORDS = frozenset(
+    {
+        # transaction type
+        "bea",
+        "sepa",
+        "trtp",
+        "incasso",
+        "algemeen",
+        "doorlopend",
+        "overboeking",
+        "ideal",
+        "wero",
+        # sepa field labels
+        "naam",
+        "omschrijving",
+        "iban",
+        "bic",
+        "kenmerk",
+        "machtiging",
+        "incassant",
+        "land",
+        "nr",
+        # placeholders
+        "notprovided",
+        # legal form
+        "b.v.",
+        "bv",
+        "nv",
+    }
+)
 
 _LONG_DIGIT_RUN = re.compile(r"\d{4,}")
 
@@ -226,9 +250,11 @@ async def import_rows(
                 account_id=account.id,
                 booked_on=row.booked_on,
                 amount_cents=row.amount_cents,
+                balance_before_cents=row.balance_before_cents,
                 balance_after_cents=row.balance_after_cents,
                 description=row.description,
                 raw_description=row.raw_description,
+                line_no=row.line_no,
                 normalizer_version=NORMALIZER_VERSION,
                 import_batch_id=import_batch_id,
             )

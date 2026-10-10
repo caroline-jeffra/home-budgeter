@@ -118,15 +118,14 @@ class Transaction(Base):
     """One transaction derived from a bank or credit card CSV import."""
 
     __tablename__ = "transactions"
-    __table_args__ = (
-        UniqueConstraint("account_id", "balance_after_cents", "amount_cents"),
-    )
+    __table_args__ = (UniqueConstraint("account_id", "balance_after_cents", "amount_cents"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id"))
     category_id: Mapped[int | None] = mapped_column(ForeignKey("categories.id"))
     booked_on: Mapped[date]
     amount_cents: Mapped[int] = mapped_column(BigInteger)
+    balance_before_cents: Mapped[int | None] = mapped_column(BigInteger)
     balance_after_cents: Mapped[int | None] = mapped_column(BigInteger)
     categorized_by: Mapped[CategorizedBy | None] = mapped_column(
         Enum(
@@ -141,6 +140,7 @@ class Transaction(Base):
     raw_description: Mapped[str]
     normalizer_version: Mapped[int]
     import_batch_id: Mapped[int | None] = mapped_column(ForeignKey("import_batches.id"))
+    line_no: Mapped[int | None]
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=func.now())
     splits: Mapped[list["TransactionSplit"]] = relationship(back_populates="transaction")

@@ -12,9 +12,7 @@ AUTH = {"Authorization": f"Bearer {settings.api_token}"}
 async def test_create_then_list_round_trip(client: AsyncClient) -> None:
     """A created account comes back from the list endpoint."""
     created = await client.post(
-        "/accounts",
-        json={"name": "Checking", "bank_name": "abn_amro"},
-        headers=AUTH
+        "/accounts", json={"name": "Checking", "bank_name": "abn_amro"}, headers=AUTH
     )
     assert created.status_code == 201
     assert created.json()["name"] == "Checking"
@@ -29,14 +27,14 @@ async def test_duplicate_account_name_is_409(client: AsyncClient) -> None:
     first = await client.post(
         "/accounts",
         json={"name": "Savings", "iban": "IBAN123443211234", "bank_name": "abn_amro"},
-        headers=AUTH
+        headers=AUTH,
     )
     assert first.status_code == 201
 
     second = await client.post(
         "/accounts",
         json={"name": "Savings", "iban": "IBAN432112344321", "bank_name": "abn_amro"},
-        headers=AUTH
+        headers=AUTH,
     )
     assert second.status_code == 409
 
@@ -46,14 +44,14 @@ async def test_duplicate_account_iban_is_409(client: AsyncClient) -> None:
     first = await client.post(
         "/accounts",
         json={"name": "Savings", "iban": "IBAN123443211234", "bank_name": "abn_amro"},
-        headers=AUTH
+        headers=AUTH,
     )
     assert first.status_code == 201
 
     second = await client.post(
         "/accounts",
         json={"name": "Checking", "iban": "IBAN123443211234", "bank_name": "abn_amro"},
-        headers=AUTH
+        headers=AUTH,
     )
     assert second.status_code == 409
 
@@ -61,16 +59,12 @@ async def test_duplicate_account_iban_is_409(client: AsyncClient) -> None:
 async def test_multiple_account_null_ibans_succeed(client: AsyncClient) -> None:
     """Accounts with NULL IBANs do not collide from the unique constraint."""
     first = await client.post(
-        "/accounts",
-        json={"name": "Savings", "bank_name": "abn_amro"},
-        headers=AUTH
+        "/accounts", json={"name": "Savings", "bank_name": "abn_amro"}, headers=AUTH
     )
     assert first.status_code == 201
 
     second = await client.post(
-        "/accounts",
-        json={"name": "Checking", "bank_name": "abn_amro"},
-        headers=AUTH
+        "/accounts", json={"name": "Checking", "bank_name": "abn_amro"}, headers=AUTH
     )
     assert second.status_code == 201
 
