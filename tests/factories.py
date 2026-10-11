@@ -25,11 +25,9 @@ _counter = count(1)
 
 async def make_account(session: AsyncSession, **kwargs: Any) -> Account:
     """Builds an account. `iban` is nullable and left unset."""
-    account = Account(**{
-        "name": f"Account {next(_counter)}",
-        "bank_name": BankName.ABN_AMRO,
-        **kwargs
-    })
+    account = Account(
+        **{"name": f"Account {next(_counter)}", "bank_name": BankName.ABN_AMRO, **kwargs}
+    )
     session.add(account)
     await session.flush()
     return account

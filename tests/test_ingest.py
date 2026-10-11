@@ -34,7 +34,7 @@ HEADER = (
 
 # A quoted BEA line: commas inside the description, and run-on padding.
 BEA_LINE = (
-    '12345678,EUR,20260807,20260807,197.15,190.60,-6.55,'
+    "12345678,EUR,20260807,20260807,197.15,190.60,-6.55,"
     '"BEA, Google Pay                  BCK*Kiosk HN 2102,PAS410        '
     'NR:BS011691, 07.08.26/12:17      AMSTERDAM NH"'
 )
@@ -46,6 +46,7 @@ TRTP_LINE = (
 )
 
 TWO_ROWS = [HEADER, BEA_LINE, TRTP_LINE]
+
 
 def _csv_upload(
     lines: list[str], name: str = "export.csv"
@@ -62,6 +63,12 @@ def test_parse_reads_a_quoted_row() -> None:
     assert row.balance_after_cents == 19060
     assert row.description.startswith("BEA, Google Pay")
     assert "PAS410" in row.description
+
+
+def test_parse_records_line_no_and_opening_balance() -> None:
+    bea, trtp = parse(TWO_ROWS, ABN_AMRO)
+    assert (bea.line_no, bea.balance_before_cents) == (2, 19715)
+    assert (trtp.line_no, trtp.balance_before_cents) == (3, 8604)
 
 
 def test_parse_rejects_a_broken_balance() -> None:
@@ -87,9 +94,7 @@ def test_normalize_collapses_whitespace() -> None:
     (raw,) = parse([HEADER, BEA_LINE], ABN_AMRO)
     (clean,) = normalize(iter([raw]))
     assert "  " not in clean.description
-    assert clean.description == (
-        "google pay bck*kiosk hn pas410 amsterdam nh"
-    )
+    assert clean.description == ("google pay bck*kiosk hn pas410 amsterdam nh")
     assert clean.raw_description == raw.raw_description
 
 
@@ -139,16 +144,16 @@ def test_normalize_text_keeps_short_digits_in_words() -> None:
 
 
 def test_normalize_reads_raw_description() -> None:
-    row = ParsedRow(date(2026, 8, 7), -655, 19060, "stale", "Fresh  TEXT")
+    row = ParsedRow(date(2026, 8, 7), -655, 19060, "stale", "Fresh  TEXT", 19715, 2)
     (clean,) = normalize(iter([row]))
     assert clean.description == "fresh text"
     assert clean.raw_description == "Fresh  TEXT"
 
 
 def test_dedup_drops_known_and_in_file_duplicates() -> None:
-    a = ParsedRow(date(2026, 8, 7), -655, 19060, "a", "a")
-    b = ParsedRow(date(2026, 8, 7), -2790, 16270, "b", "b" )
-    a_again = ParsedRow(date(2026, 8, 7), -655, 19060, "a restated", "a restated")
+    a = ParsedRow(date(2026, 8, 7), -655, 19060, "a", "a", 19715, 2)
+    b = ParsedRow(date(2026, 8, 7), -2790, 16270, "b", "b", 19060, 3)
+    a_again = ParsedRow(date(2026, 8, 7), -655, 19060, "a restated", "a restated", 19715, 4)
 
     kept = list(dedup(iter([a, b, a_again]), {b.dedup_key}))
 
@@ -165,15 +170,16 @@ async def test_import_inserts_rows(session: AsyncSession) -> None:
     assert len(stored) == 2
     assert {t.amount_cents for t in stored} == {-655, 15000}
     assert {t.import_batch_id for t in stored} == {batch.id}
+    assert {(t.line_no, t.balance_before_cents) for t in stored} == {(2, 19715), (3, 8604)}
 
 
 async def test_reimport_is_a_no_op(session: AsyncSession) -> None:
     account = await make_account(session, bank_name="abn_amro")
     first = await make_import_batch(session, account)
     second = await make_import_batch(session, account)
-    assert await import_rows(
-        session, account, TWO_ROWS, import_batch_id=first.id
-    ) == ImportSummary(rows_read=2, inserted=2)
+    assert await import_rows(session, account, TWO_ROWS, import_batch_id=first.id) == ImportSummary(
+        rows_read=2, inserted=2
+    )
     assert await import_rows(
         session, account, TWO_ROWS, import_batch_id=second.id
     ) == ImportSummary(rows_read=2, inserted=0)
@@ -182,17 +188,13 @@ async def test_reimport_is_a_no_op(session: AsyncSession) -> None:
     assert count == 2
 
 
-async def test_overlapping_ranges_import_only_new_rows(
-    session: AsyncSession
-) -> None:
+async def test_overlapping_ranges_import_only_new_rows(session: AsyncSession) -> None:
     account = await make_account(session, bank_name="abn_amro")
     first = await make_import_batch(session, account)
     second = await make_import_batch(session, account)
     assert await import_rows(
         session, account, [HEADER, BEA_LINE], import_batch_id=first.id
-    ) == ImportSummary(
-        rows_read=1, inserted=1
-    )
+    ) == ImportSummary(rows_read=1, inserted=1)
 
     # Second export overlaps the first: BEA_LINE again, plus one new row.
     assert await import_rows(
@@ -205,9 +207,7 @@ async def test_overlapping_ranges_import_only_new_rows(
     assert {t.import_batch_id for t in stored} == {first.id, second.id}
 
 
-async def test_import_endpoint_inserts_rows(
-    client: AsyncClient, session: AsyncSession
-) -> None:
+async def test_import_endpoint_inserts_rows(client: AsyncClient, session: AsyncSession) -> None:
     """A posted export lands as transactions, and the response counts them."""
     account = await make_account(session, bank_name="abn_amro")
 
@@ -228,16 +228,12 @@ async def test_import_endpoint_inserts_rows(
     }
 
     count = await session.scalar(
-        select(func.count()).select_from(Transaction).where(
-            Transaction.account_id == account.id
-        )
+        select(func.count()).select_from(Transaction).where(Transaction.account_id == account.id)
     )
     assert count == 2
 
 
-async def test_import_endpoint_is_idempotent(
-    client: AsyncClient, session: AsyncSession
-) -> None:
+async def test_import_endpoint_is_idempotent(client: AsyncClient, session: AsyncSession) -> None:
     """Re-importing the same file returns the original batch and writes nothing."""
     account = await make_account(session, bank_name="abn_amro")
 
@@ -263,9 +259,7 @@ async def test_import_endpoint_is_idempotent(
     }
 
     count = await session.scalar(
-        select(func.count()).select_from(Transaction).where(
-            Transaction.account_id == account.id
-        )
+        select(func.count()).select_from(Transaction).where(Transaction.account_id == account.id)
     )
     assert count == 2
 
@@ -273,9 +267,7 @@ async def test_import_endpoint_is_idempotent(
     assert batches == 1
 
 
-async def test_import_records_a_batch(
-    client: AsyncClient, session: AsyncSession
-) -> None:
+async def test_import_records_a_batch(client: AsyncClient, session: AsyncSession) -> None:
     """A successful import stores the file, its hash and counts,
     and every inserted row points at the batch"""
 
@@ -336,9 +328,7 @@ async def test_import_malformed_row_persists_nothing(
     assert "line 3" in response.json()["detail"]
 
     count = await session.scalar(
-        select(func.count()).select_from(Transaction).where(
-            Transaction.account_id == account.id
-        )
+        select(func.count()).select_from(Transaction).where(Transaction.account_id == account.id)
     )
     assert count == 0
 

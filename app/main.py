@@ -105,8 +105,7 @@ async def import_transactions(
     file_sha256 = hashlib.sha256(raw).hexdigest()
     existing = await session.scalar(
         select(ImportBatch).where(
-            ImportBatch.account_id == account.id,
-            ImportBatch.file_sha256 == file_sha256
+            ImportBatch.account_id == account.id, ImportBatch.file_sha256 == file_sha256
         )
     )
     if existing is not None:

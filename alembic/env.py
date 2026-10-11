@@ -35,14 +35,15 @@ def include_object(
     name: str | None,
     type_: NameFilterType,
     reflected: bool,
-    compare_to: SchemaItem | None
-    ) -> bool:
+    compare_to: SchemaItem | None,
+) -> bool:
     """Filter what autogenerates compares."""
     if type_ == "table" and name == "alembic_version":
         return False
-    return not (reflected and type_ not in (
-        "table", "column", "index", "unique_constraint", "foreign_key_constraint"
-        ))
+    return not (
+        reflected
+        and type_ not in ("table", "column", "index", "unique_constraint", "foreign_key_constraint")
+    )
 
 
 def run_migrations_offline() -> None:
@@ -74,7 +75,7 @@ def do_run_migrations(connection: Connection) -> None:
     context.configure(
         connection=connection,
         target_metadata=target_metadata,
-        include_object=include_object,    
+        include_object=include_object,
     )
 
     with context.begin_transaction():
