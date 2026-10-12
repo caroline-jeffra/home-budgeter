@@ -22,8 +22,8 @@ class ChainBreak:
 
 async def chain_breaks(session: AsyncSession, account_id: int) -> list[ChainBreak]:
     """Every break in an account's balance chain, in chain order.
-    
-    The chain is the account's imported rows in orer. Manual transactions have no balance and sit 
+
+    The chain is the account's imported rows in order. Manual transactions have no balance and sit
     outside it."""
     previous_after = (
         func.lag(Transaction.balance_after_cents)
