@@ -4,6 +4,7 @@ from datetime import date
 
 from pydantic import BaseModel, ConfigDict
 
+from app.continuity import ChainBreak
 from app.models import BankName
 
 
@@ -77,3 +78,13 @@ class ImportResult(BaseModel):
     skipped: int
     batch_id: int
     already_imported: bool
+    gaps_opened: list[ChainBreak] = []
+    gaps_closed: list[ChainBreak] = []
+
+
+class ReconciliationRead(BaseModel):
+    """An account's balance chain: whether it is continuous, and where it is not."""
+
+    account_id: int
+    continuous: bool
+    gaps: list[ChainBreak]

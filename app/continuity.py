@@ -60,3 +60,63 @@ async def chain_breaks(session: AsyncSession, account_id: int) -> list[ChainBrea
         )
         for row in result
     ]
+
+
+@dataclass(frozen=True)
+class ContinuityReport:
+    """What one import did to an account's balance chain."""
+
+    gaps_opened: list[ChainBreak]
+    gaps_closed: list[ChainBreak]
+    conflicts: list[ChainBreak]
+
+
+def classify(
+    before: list[ChainBreak],
+    after: list[ChainBreak],
+    overlap: tuple[date, date] | None,
+) -> ContinuityReport:
+    """Sort the breaks an import created or removed.
+
+    New breaks dated inside `overlap` are conflicts; the rest are gaps.
+    Breaks present before and gone after are closed."""
+    before_ids = {b.transaction_id for b in before}
+    after_ids = {b.transaction_id for b in after}
+    opened = [b for b in after if b.transaction_id not in before_ids]
+    conflicts = [
+        b for b in opened if overlap is not None and overlap[0] <= b.booked_on <= overlap[1]
+    ]
+    return ContinuityReport(
+        gaps_opened=[b for b in opened if b not in conflicts],
+        gaps_closed=[b for b in before if b.transaction_id not in after_ids],
+        conflicts=conflicts,
+    )
+
+
+async def overlap_window(
+        session: AsyncSession, account_id: int, import_batch_id: int
+) -> tuple[date, date] | None:
+    """The dates on which this batch's rows meet rows already stored.
+
+    The span of earlier imported rows inside the batch's own date range; None when
+    the batch only extends the account or fills a hole."""
+    batch_start, batch_end = (
+        await session.execute(
+            select(func.min(Transaction.booked_on), func.max(Transaction.booked_on)).where(
+                Transaction.import_batch_id == import_batch_id
+            )
+        )
+    ).one()
+    if batch_start is None:
+        return None
+    start, end = (
+        await session.execute(
+            select(func.min(Transaction.booked_on), func.max(Transaction.booked_on)).where(
+                Transaction.account_id == account_id,
+                Transaction.balance_before_cents.is_not(None),
+                Transaction.import_batch_id != import_batch_id,
+                Transaction.booked_on.between(batch_start, batch_end),
+            )
+        )
+    ).one()
+    return None if start is None else (start, end)

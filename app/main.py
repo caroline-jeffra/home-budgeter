@@ -11,6 +11,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import require_auth
+from app.continuity import chain_breaks, classify, overlap_window
 from app.db import get_session
 from app.ingest import NORMALIZER_VERSION, import_rows
 from app.models import Account, Category, ImportBatch, Transaction, TransactionSplit
@@ -20,6 +21,7 @@ from app.schemas import (
     CategoryCreate,
     CategoryRead,
     ImportResult,
+    ReconciliationRead,
     TransactionCreate,
     TransactionRead,
 )
@@ -148,6 +150,7 @@ async def import_transactions(
             detail="This file is already being imported.",
         ) from exc
 
+    before = await chain_breaks(session, account.id)
     try:
         summary = await import_rows(
             session, account, text_body.splitlines(), import_batch_id=batch.id
@@ -163,6 +166,29 @@ async def import_transactions(
             detail=str(exc),
         ) from exc
 
+    report = classify(
+        before,
+        await chain_breaks(session, account.id),
+        await overlap_window(session, account.id, batch.id),
+    )
+    if report.conflicts:
+        await session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "message": "The file disagrees with stored rows where they overlap. "
+                "Nothing was imported; void the stored batch to replace it.",
+                "conflicts": [
+                    {
+                        "booked_on": b.booked_on.isoformat(),
+                        "expected_before_cents": b.expected_before_cents,
+                        "actual_before_cents": b.actual_before_cents,
+                    }
+                    for b in report.conflicts
+                ],
+            },
+        )
+
     batch.rows_read = summary.rows_read
     batch.inserted = summary.inserted
     batch.skipped = summary.rows_read - summary.inserted
@@ -174,7 +200,21 @@ async def import_transactions(
         skipped=batch.skipped,
         batch_id=batch.id,
         already_imported=False,
+        gaps_opened=report.gaps_opened,
+        gaps_closed=report.gaps_closed,
     )
+
+
+@router.get("/accounts/{account_id}/reconciliation", response_model=ReconciliationRead)
+async def reconcile_account(account_id: int, session: Session) -> ReconciliationRead:
+    """Every gap in an account's balance chain; conflicts are never stored."""
+    if await session.get(Account, account_id) is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No account with id {account_id}",
+        )
+    gaps = await chain_breaks(session, account_id)
+    return ReconciliationRead(account_id=account_id, continuous=not gaps, gaps=gaps)
 
 
 @router.post("/categories", response_model=CategoryRead, status_code=201)
