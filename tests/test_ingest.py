@@ -225,6 +225,16 @@ async def test_import_endpoint_inserts_rows(client: AsyncClient, session: AsyncS
         "skipped": 0,
         "batch_id": ANY,
         "already_imported": False,
+        "gaps_opened": [
+            {
+                "transaction_id": ANY,
+                "booked_on": "2026-08-08",
+                "import_batch_id": ANY,
+                "expected_before_cents": 19060,
+                "actual_before_cents": 8604,
+            }
+        ],
+        "gaps_closed": [],
     }
 
     count = await session.scalar(
@@ -256,6 +266,8 @@ async def test_import_endpoint_is_idempotent(client: AsyncClient, session: Async
         "skipped": 0,
         "batch_id": first.json()["batch_id"],
         "already_imported": True,
+        "gaps_opened": [],
+        "gaps_closed": [],
     }
 
     count = await session.scalar(
