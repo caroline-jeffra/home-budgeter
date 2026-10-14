@@ -3,7 +3,15 @@
 import enum
 from datetime import date, datetime
 
-from sqlalchemy import BigInteger, Enum, ForeignKey, MetaData, UniqueConstraint, func
+from sqlalchemy import (
+    BigInteger,
+    CheckConstraint,
+    Enum,
+    ForeignKey,
+    MetaData,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 NAMING_CONVENTION = {
@@ -90,7 +98,10 @@ class ImportBatch(Base):
     """One batch of transactions from a bank or credit card imported in a single CSV."""
 
     __tablename__ = "import_batches"
-    __table_args__ = (UniqueConstraint("account_id", "file_sha256"),)
+    __table_args__ = (
+        UniqueConstraint("account_id", "file_sha256"),
+        CheckConstraint("(voided_at IS NULL) = (void_reason IS NULL)", name="void_reason"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id"))
@@ -112,6 +123,8 @@ class ImportBatch(Base):
     rows_read: Mapped[int]
     inserted: Mapped[int]
     skipped: Mapped[int]
+    voided_at: Mapped[datetime | None]
+    void_reason: Mapped[str | None]
 
 
 class Transaction(Base):
