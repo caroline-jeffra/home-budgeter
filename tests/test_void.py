@@ -4,6 +4,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.cli import build_parser
 from app.ingest import import_rows
 from app.models import Account, ImportBatch, Transaction, TransactionSplit, TransferMatch
 from app.void import void_batch
@@ -98,3 +99,8 @@ async def test_void_deletes_transfer_matches_first(session: AsyncSession) -> Non
 
     stmt = select(TransferMatch).where(TransferMatch.id == match.id)
     assert await session.scalar(stmt) is None
+
+
+def test_void_requires_a_reason() -> None:
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(["void", "1"])
