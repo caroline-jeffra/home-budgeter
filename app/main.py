@@ -111,6 +111,14 @@ async def import_transactions(
         )
     )
     if existing is not None:
+        if existing.voided_at is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"this file was imported as batch {existing.id} and voided: "
+                    f"{existing.void_reason}; upload a fresh export"
+                ),
+            )
         return ImportResult(
             account_id=account.id,
             rows_read=existing.rows_read,
