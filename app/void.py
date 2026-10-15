@@ -5,7 +5,7 @@ from typing import Any, cast
 from sqlalchemy import CursorResult, delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import ImportBatch, Transaction
+from app.models import ImportBatch, Transaction, TransactionSplit, TransferMatch
 
 
 async def void_batch(session: AsyncSession, batch_id: int, reason: str) -> int:
@@ -26,6 +26,16 @@ async def void_batch(session: AsyncSession, batch_id: int, reason: str) -> int:
         )
 
     await session.execute(select(func.set_config("app.void_batch_id", str(batch_id), True)))
+    batch_rows = select(Transaction.id).where(Transaction.import_batch_id == batch_id)
+    await session.execute(
+        delete(TransferMatch).where(
+            TransferMatch.source_id.in_(batch_rows) |
+            TransferMatch.destination_id.in_(batch_rows)
+        )
+    )
+    await session.execute(
+        delete(TransactionSplit).where(TransactionSplit.transaction_id.in_(batch_rows))
+    )
     result = cast(
         CursorResult[Any],
         await session.execute(delete(Transaction).where(Transaction.import_batch_id == batch_id)),

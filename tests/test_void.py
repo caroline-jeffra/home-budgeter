@@ -5,9 +5,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ingest import import_rows
-from app.models import Account, ImportBatch, Transaction
+from app.models import Account, ImportBatch, Transaction, TransactionSplit, TransferMatch
 from app.void import void_batch
-from tests.factories import make_account, make_import_batch
+from tests.factories import make_account, make_import_batch, make_split, make_transfer_match
 from tests.test_ingest import BEA_LINE, HEADER, TRTP_LINE
 
 
@@ -74,3 +74,27 @@ async def test_void_rejects_a_blank_reason(session: AsyncSession, reason: str) -
 
     with pytest.raises(ValueError, match="needs a reason"):
         await void_batch(session, batch.id, reason)
+
+
+async def test_void_deletes_splits_first(session: AsyncSession) -> None:
+    account = await make_account(session)
+    batch = await _imported_batch(session, account)
+    [row] = await _rows_in(session, batch)
+    split = await make_split(session, row)
+
+    await void_batch(session, batch.id, "bad export")
+
+    stmt = select(TransactionSplit).where(TransactionSplit.id == split.id)
+    assert await session.scalar(stmt) is None
+
+
+async def test_void_deletes_transfer_matches_first(session: AsyncSession) -> None:
+    account = await make_account(session)
+    batch = await _imported_batch(session, account)
+    [row] = await _rows_in(session, batch)
+    match = await make_transfer_match(session, source=row)
+
+    await void_batch(session, batch.id, "bad export")
+
+    stmt = select(TransferMatch).where(TransferMatch.id == match.id)
+    assert await session.scalar(stmt) is None
