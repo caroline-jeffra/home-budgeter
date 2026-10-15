@@ -24,6 +24,7 @@ from app.ingest import (
     parse,
 )
 from app.models import ImportBatch, Transaction
+from app.void import void_batch
 from tests.factories import make_account, make_import_batch
 
 AUTH = {"Authorization": f"Bearer {settings.api_token}"}
@@ -277,6 +278,28 @@ async def test_import_endpoint_is_idempotent(client: AsyncClient, session: Async
 
     batches = await session.scalar(select(func.count()).select_from(ImportBatch))
     assert batches == 1
+
+
+async def test_uploading_a_voided_file_is_a_conflict(
+    client: AsyncClient, session: AsyncSession
+) -> None:
+    """Re-uploading a voided file is refused, naming the reason, instead of a silent no-op."""
+    account = await make_account(session, bank_name="abn_amro")
+    first = await client.post(
+        f"/accounts/{account.id}/import",
+        files=_csv_upload(TWO_ROWS),
+        headers=AUTH,
+    )
+    await void_batch(session, first.json()["batch_id"], "bank restated 08-08")
+
+    response = await client.post(
+        f"/accounts/{account.id}/import",
+        files=_csv_upload(TWO_ROWS),
+        headers=AUTH,
+    )
+
+    assert response.status_code == 409
+    assert "bank restated 08-08" in response.json()["detail"]
 
 
 async def test_import_records_a_batch(client: AsyncClient, session: AsyncSession) -> None:
