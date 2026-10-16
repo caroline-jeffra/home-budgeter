@@ -27,8 +27,7 @@ NEXT_LINE = (
 
 # TRTP_LINE continues this one: closes at its opening balance, 86.04
 OPENING_LINE = (
-    "12345678,EUR,20260807,20260807,96.04,86.04,-10.00,"
-    '"BEA, Google Pay  ALBERT HEIJN 1234,PAS410"'
+    '12345678,EUR,20260807,20260807,96.04,86.04,-10.00,"BEA, Google Pay  ALBERT HEIJN 1234,PAS410"'
 )
 
 # The bank restates 08-08's +150.00 as +140.00: same day, same opening balance.
@@ -144,10 +143,10 @@ async def test_import_reports_a_gap_it_opens(client: AsyncClient, session: Async
     await _upload(client, account.id, [HEADER, BEA_LINE])
     # Nothing links 08-07 (closes 190.60) to 08-09 (opens 236.04).
     second = await _upload(client, account.id, [HEADER, NEXT_LINE])
-    
+
     assert second.status_code == 200
     assert second.json()["gaps_opened"] == [
-       {
+        {
             "transaction_id": ANY,
             "booked_on": "2026-08-09",
             "import_batch_id": second.json()["batch_id"],
@@ -170,7 +169,7 @@ async def test_import_reports_a_gap_it_closes(client: AsyncClient, session: Asyn
 
 
 async def test_a_restated_row_is_a_conflict_and_writes_nothing(
-        client: AsyncClient, session: AsyncSession
+    client: AsyncClient, session: AsyncSession
 ) -> None:
     account = await make_account(session, bank_name="abn_amro")
 
