@@ -11,7 +11,10 @@ jobs:
         runs-on: ubuntu-latest
         services:
             postgres:
-                image: public.ecr.aws/docker/library/postgres:16
+                image: postgres:16
+                credentials:
+                    username: ${{ vars.DOCKERHUB_USERNAME }}
+                    password: ${{ secrets.DOCKERHUB_TOKEN }}
                 env:
                     POSTGRES_USER: budget
                     POSTGRES_PASSWORD: budget
