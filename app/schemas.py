@@ -78,8 +78,8 @@ class ImportResult(BaseModel):
     skipped: int
     batch_id: int
     already_imported: bool
-    gaps_opened: list[ChainBreak] = []
-    gaps_closed: list[ChainBreak] = []
+    gaps_opened: list[ChainBreak] | None
+    gaps_closed: list[ChainBreak] | None
 
 
 class ReconciliationRead(BaseModel):

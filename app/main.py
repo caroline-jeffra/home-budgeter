@@ -126,6 +126,8 @@ async def import_transactions(
             skipped=existing.skipped,
             batch_id=existing.id,
             already_imported=True,
+            gaps_opened=None,
+            gaps_closed=None,
         )
 
     try:

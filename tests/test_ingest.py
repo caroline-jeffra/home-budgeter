@@ -267,8 +267,8 @@ async def test_import_endpoint_is_idempotent(client: AsyncClient, session: Async
         "skipped": 0,
         "batch_id": first.json()["batch_id"],
         "already_imported": True,
-        "gaps_opened": [],
-        "gaps_closed": [],
+        "gaps_opened": None,
+        "gaps_closed": None,
     }
 
     count = await session.scalar(
