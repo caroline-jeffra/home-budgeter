@@ -94,7 +94,7 @@ def classify(
 
 
 async def overlap_window(
-        session: AsyncSession, account_id: int, import_batch_id: int
+    session: AsyncSession, account_id: int, import_batch_id: int
 ) -> tuple[date, date] | None:
     """The dates on which this batch's rows meet rows already stored.
 
