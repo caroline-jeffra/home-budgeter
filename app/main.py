@@ -175,6 +175,15 @@ async def import_transactions(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=str(exc),
         ) from exc
+    except IntegrityError as exc:
+        await session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "A row in this file has the same balance and amount as a stored "
+                "transaction on another date. Nothing was imported."
+            ),
+        ) from exc
 
     report = classify(
         before,

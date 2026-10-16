@@ -368,6 +368,36 @@ async def test_import_malformed_row_persists_nothing(
     assert count == 0
 
 
+async def test_key_collision_outside_the_file_dates_is_a_conflict(
+    client: AsyncClient, session: AsyncSession
+) -> None:
+    """A stored row on another date with the same balance and amount rejects the file."""
+    account = await make_account(session)
+    account_id = account.id
+    first = await client.post(
+        f"/accounts/{account_id}/import",
+        files=_csv_upload([HEADER, BEA_LINE]),
+        headers=AUTH,
+    )
+    assert first.status_code == 200
+
+    # Same balance and amount as BEA_LINE, one month later.
+    september = "12345678,EUR,20260907,20260907,197.15,190.60,-6.55,BEA something else"
+    response = await client.post(
+        f"/accounts/{account_id}/import",
+        files=_csv_upload([HEADER, september], name="september.csv"),
+        headers=AUTH,
+    )
+
+    assert response.status_code == 409
+    assert "balance and amount" in response.json()["detail"]
+
+    count = await session.scalar(
+        select(func.count()).select_from(Transaction).where(Transaction.account_id == account_id)
+    )
+    assert count == 1
+
+
 async def test_import_oversized_upload_is_413(
     client: AsyncClient, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
