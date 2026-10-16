@@ -27,7 +27,7 @@ async def _rows_in(session: AsyncSession, batch: ImportBatch) -> list[Transactio
     return list((await session.scalars(stmt)).all())
 
 
-async def test_void_deletes_the_batch_rows_and_keeps_the_batch(session:AsyncSession) -> None:
+async def test_void_deletes_the_batch_rows_and_keeps_the_batch(session: AsyncSession) -> None:
     account = await make_account(session)
     batch = await _imported_batch(session, account)
 

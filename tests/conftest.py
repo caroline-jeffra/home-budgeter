@@ -3,6 +3,7 @@
 import asyncio
 from collections.abc import AsyncGenerator
 
+import pytest
 from alembic.config import Config
 from httpx import ASGITransport, AsyncClient
 from pytest_asyncio import fixture
@@ -29,6 +30,10 @@ async def _schema() -> AsyncGenerator[None]:
     """Build the test schema by running the migrations, then tear it down.
 
     Schema comes from Alembic to ensure build mirrors production."""
+    if not (engine.url.database or "").endswith("_test"):
+        pytest.exit(
+            f"refusing to run: {engine.url.database!r} is not a *_test database", returncode=1
+        )
     config = Config("alembic.ini")
     await asyncio.to_thread(command.upgrade, config, "head")
     yield

@@ -10,7 +10,7 @@ from app.models import ImportBatch, Transaction, TransactionSplit, TransferMatch
 
 async def void_batch(session: AsyncSession, batch_id: int, reason: str) -> int:
     """Delete one import batch's transactions and stamp the batch voided, returning the count
-    
+
     Does not commit; the caller owns the transaction."""
     reason = reason.strip()
     if not reason:
@@ -19,7 +19,7 @@ async def void_batch(session: AsyncSession, batch_id: int, reason: str) -> int:
     batch = await session.get(ImportBatch, batch_id, with_for_update=True)
     if batch is None:
         raise ValueError(f"no import batch {batch_id}")
-    if batch.voided_at is not None: 
+    if batch.voided_at is not None:
         raise ValueError(
             f"import batch {batch_id} was already voided at {batch.voided_at:%Y-%m-%d %H:%M}:"
             f"{batch.void_reason}"
@@ -29,8 +29,7 @@ async def void_batch(session: AsyncSession, batch_id: int, reason: str) -> int:
     batch_rows = select(Transaction.id).where(Transaction.import_batch_id == batch_id)
     await session.execute(
         delete(TransferMatch).where(
-            TransferMatch.source_id.in_(batch_rows) |
-            TransferMatch.destination_id.in_(batch_rows)
+            TransferMatch.source_id.in_(batch_rows) | TransferMatch.destination_id.in_(batch_rows)
         )
     )
     await session.execute(
