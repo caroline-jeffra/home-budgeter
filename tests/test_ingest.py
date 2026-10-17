@@ -368,10 +368,10 @@ async def test_import_malformed_row_persists_nothing(
     assert count == 0
 
 
-async def test_key_collision_outside_the_file_dates_is_a_conflict(
+async def test_same_balance_and_amount_on_another_date_is_imported(
     client: AsyncClient, session: AsyncSession
 ) -> None:
-    """A stored row on another date with the same balance and amount rejects the file."""
+    """A balance revisited on a later date is a new transaction, not a duplicate."""
     account = await make_account(session)
     account_id = account.id
     first = await client.post(
@@ -389,13 +389,12 @@ async def test_key_collision_outside_the_file_dates_is_a_conflict(
         headers=AUTH,
     )
 
-    assert response.status_code == 409
-    assert "balance and amount" in response.json()["detail"]
+    assert response.status_code == 200
 
     count = await session.scalar(
         select(func.count()).select_from(Transaction).where(Transaction.account_id == account_id)
     )
-    assert count == 1
+    assert count == 2
 
 
 async def test_import_oversized_upload_is_413(
