@@ -6,7 +6,7 @@ from datetime import date
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, FastAPI, File, HTTPException, Query, UploadFile, status
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -138,6 +138,14 @@ async def import_transactions(
             detail="File is not valid UTF-8",
         ) from exc
 
+    # Released at commit or rollback.
+    locked = await session.scalar(select(func.pg_try_advisory_xact_lock(account.id)))
+    if not locked:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Another import for this account is in progress; retry when it finishes.",
+        )
+
     batch = ImportBatch(
         account_id=account.id,
         filename=file.filename or "",
@@ -180,8 +188,8 @@ async def import_transactions(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=(
-                "A row in this file has the same balance and amount as a stored "
-                "transaction on another date. Nothing was imported."
+                "A row in this file collided with a transaction written during the "
+                "import. Nothing was imported; retry the upload."
             ),
         ) from exc
 
