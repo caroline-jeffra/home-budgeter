@@ -8,10 +8,12 @@ from unittest.mock import ANY
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import main
 from app.config import settings
+from app.db import engine
 from app.ingest import (
     ABN_AMRO,
     NOISE_WORDS,
@@ -315,6 +317,26 @@ async def test_import_endpoint_is_idempotent(client: AsyncClient, session: Async
     assert batches == 1
 
 
+async def test_import_while_account_is_locked_is_409(
+    client: AsyncClient, session: AsyncSession
+) -> None:
+    """A second import for the same account is refused, not queued."""
+    account = await make_account(session, bank_name="abn_amro")
+
+    async with engine.connect() as other:
+        await other.execute(select(func.pg_advisory_xact_lock(account.id)))
+        response = await client.post(
+            f"/accounts/{account.id}/import",
+            files=_csv_upload(TWO_ROWS),
+            headers=AUTH,
+        )
+
+    assert response.status_code == 409
+    assert "in progress" in response.json()["detail"]
+    batches = await session.scalar(select(func.count()).select_from(ImportBatch))
+    assert batches == 0
+
+
 async def test_uploading_a_voided_file_is_a_conflict(
     client: AsyncClient, session: AsyncSession
 ) -> None:
@@ -446,3 +468,23 @@ async def test_import_oversized_upload_is_413(
     )
 
     assert response.status_code == 413
+
+
+async def test_import_integrity_error_is_409(
+    client: AsyncClient, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A unique-key race during import rolls back and asks for a retry."""
+    account = await make_account(session, bank_name="abn_amro")
+
+    async def collide(*args: object, **kwargs: object) -> None:
+        raise IntegrityError("INSERT", {}, Exception("duplicate key"))
+
+    monkeypatch.setattr(main, "import_rows", collide)
+    response = await client.post(
+        f"/accounts/{account.id}/import",
+        files=_csv_upload(TWO_ROWS),
+        headers=AUTH,
+    )
+
+    assert response.status_code == 409
+    assert "retry" in response.json()["detail"]
