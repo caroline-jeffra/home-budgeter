@@ -181,7 +181,6 @@ def test_assign_occurrences_numbers_same_key_rows_in_file_order() -> None:
     assert [r.occurrence for r in rows] == [0, 0, 1, 0]
 
 
-
 async def test_import_inserts_rows(session: AsyncSession) -> None:
     account = await make_account(session, bank_name="abn_amro")
     batch = await make_import_batch(session, account)

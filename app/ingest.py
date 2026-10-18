@@ -202,7 +202,7 @@ def normalize(rows: Iterator[ParsedRow]) -> Iterator[ParsedRow]:
 
 
 def assign_occurrences(rows: Iterator[ParsedRow]) -> Iterator[ParsedRow]:
-    """Number rows sharing date, blaance and amount, 0-based in file order."""
+    """Number rows sharing date, balance and amount, 0-based in file order."""
     counts: Counter[tuple[date, int | None, int]] = Counter()
     for row in rows:
         same = (row.booked_on, row.balance_after_cents, row.amount_cents)
@@ -226,7 +226,7 @@ async def existing_keys(
     """Load dedup keys already stored for this account in a date range."""
     stmt = select(
         Transaction.booked_on,
-        Transaction.balance_after_cents, 
+        Transaction.balance_after_cents,
         Transaction.amount_cents,
         Transaction.occurrence,
     ).where(
