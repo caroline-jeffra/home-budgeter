@@ -3,6 +3,7 @@
 import csv
 import re
 import unicodedata
+from collections import Counter
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, replace
 from datetime import date, datetime
@@ -68,6 +69,9 @@ class ImportSummary:
     inserted: int
 
 
+DedupKey = tuple[date, int | None, int, int]
+
+
 @dataclass(frozen=True)
 class ParsedRow:
     """One transaction parsed from a CSV, before it becomes a Transaction."""
@@ -79,11 +83,12 @@ class ParsedRow:
     raw_description: str
     balance_before_cents: int | None
     line_no: int | None
+    occurrence: int = 0
 
     @property
-    def dedup_key(self) -> tuple[int | None, int]:
-        """The account-scoped half of the dedup key."""
-        return (self.balance_after_cents, self.amount_cents)
+    def dedup_key(self) -> DedupKey:
+        """The account-scoped part of the dedup key."""
+        return (self.booked_on, self.balance_after_cents, self.amount_cents, self.occurrence)
 
 
 def parse(lines: Iterable[str], profile: ImportProfile) -> Iterator[ParsedRow]:
@@ -196,7 +201,16 @@ def normalize(rows: Iterator[ParsedRow]) -> Iterator[ParsedRow]:
         yield replace(row, description=normalize_text(row.raw_description))
 
 
-def dedup(rows: Iterator[ParsedRow], existing: set[tuple[int | None, int]]) -> Iterator[ParsedRow]:
+def assign_occurrences(rows: Iterator[ParsedRow]) -> Iterator[ParsedRow]:
+    """Number rows sharing date, balance and amount, 0-based in file order."""
+    counts: Counter[tuple[date, int | None, int]] = Counter()
+    for row in rows:
+        same = (row.booked_on, row.balance_after_cents, row.amount_cents)
+        yield replace(row, occurrence=counts[same])
+        counts[same] += 1
+
+
+def dedup(rows: Iterator[ParsedRow], existing: set[DedupKey]) -> Iterator[ParsedRow]:
     """Drop rows already stored, and duplicates within this file."""
     seen = set(existing)
     for row in rows:
@@ -208,15 +222,20 @@ def dedup(rows: Iterator[ParsedRow], existing: set[tuple[int | None, int]]) -> I
 
 async def existing_keys(
     session: AsyncSession, account_id: int, start: date, end: date
-) -> set[tuple[int | None, int]]:
+) -> set[DedupKey]:
     """Load dedup keys already stored for this account in a date range."""
-    stmt = select(Transaction.balance_after_cents, Transaction.amount_cents).where(
+    stmt = select(
+        Transaction.booked_on,
+        Transaction.balance_after_cents,
+        Transaction.amount_cents,
+        Transaction.occurrence,
+    ).where(
         Transaction.account_id == account_id,
         Transaction.balance_after_cents.is_not(None),
         Transaction.booked_on.between(start, end),
     )
     result = await session.execute(stmt)
-    return {(balance, amount) for balance, amount in result.all()}
+    return {(booked, balance, amount, occ) for booked, balance, amount, occ in result.all()}
 
 
 async def import_rows(
@@ -235,7 +254,7 @@ async def import_rows(
             "(content hash + occurrence) is designed but not built."
         )
 
-    rows = list(normalize(parse(lines, profile)))
+    rows = list(assign_occurrences(normalize(parse(lines, profile))))
     if not rows:
         return ImportSummary(rows_read=0, inserted=0)
 
@@ -255,6 +274,7 @@ async def import_rows(
                 description=row.description,
                 raw_description=row.raw_description,
                 line_no=row.line_no,
+                occurrence=row.occurrence,
                 normalizer_version=NORMALIZER_VERSION,
                 import_batch_id=import_batch_id,
             )
