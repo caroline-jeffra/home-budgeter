@@ -17,6 +17,7 @@ from app.ingest import (
     NOISE_WORDS,
     ImportSummary,
     ParsedRow,
+    assign_occurrences,
     dedup,
     import_rows,
     normalize,
@@ -47,6 +48,14 @@ TRTP_LINE = (
 )
 
 TWO_ROWS = [HEADER, BEA_LINE, TRTP_LINE]
+
+# A storno and re-collection: the balance runs 100 -> 50 twice on one day.
+REVISIT_ROWS = [
+    HEADER,
+    "12345678,EUR,20260809,20260809,100.00,50.00,-50.00,Incasso Gym",
+    "12345678,EUR,20260809,20260809,50.00,100.00,50.00,Storno Gym",
+    "12345678,EUR,20260809,20260809,100.00,50.00,-50.00,Incasso Gym",
+]
 
 
 def _csv_upload(
@@ -161,6 +170,18 @@ def test_dedup_drops_known_and_in_file_duplicates() -> None:
     assert [r.description for r in kept] == ["a"]
 
 
+def test_assign_occurrences_numbers_same_key_rows_in_file_order() -> None:
+    a = ParsedRow(date(2026, 8, 9), -5000, 5000, "a", "a", 10000, 2)
+    b = ParsedRow(date(2026, 8, 9), 5000, 10000, "b", "b", 5000, 3)
+    a_again = ParsedRow(date(2026, 8, 9), -5000, 5000, "a", "a", 10000, 4)
+    a_next_day = ParsedRow(date(2026, 8, 10), -5000, 5000, "a", "a", 10000, 5)
+
+    rows = list(assign_occurrences(iter([a, b, a_again, a_next_day])))
+
+    assert [r.occurrence for r in rows] == [0, 0, 1, 0]
+
+
+
 async def test_import_inserts_rows(session: AsyncSession) -> None:
     account = await make_account(session, bank_name="abn_amro")
     batch = await make_import_batch(session, account)
@@ -206,6 +227,21 @@ async def test_overlapping_ranges_import_only_new_rows(session: AsyncSession) ->
     assert len(stored) == 2
     assert {t.amount_cents for t in stored} == {-655, 15000}
     assert {t.import_batch_id for t in stored} == {first.id, second.id}
+
+
+async def test_same_day_balance_revisit_is_imported(session: AsyncSession) -> None:
+    account = await make_account(session, bank_name="abn_amro")
+    first = await make_import_batch(session, account)
+    second = await make_import_batch(session, account)
+    assert await import_rows(
+        session, account, REVISIT_ROWS, import_batch_id=first.id
+    ) == ImportSummary(rows_read=3, inserted=3)
+    assert await import_rows(
+        session, account, REVISIT_ROWS, import_batch_id=second.id
+    ) == ImportSummary(rows_read=3, inserted=0)
+
+    stored = (await session.scalars(select(Transaction).order_by(Transaction.line_no))).all()
+    assert [t.occurrence for t in stored] == [0, 0, 1]
 
 
 async def test_import_endpoint_inserts_rows(client: AsyncClient, session: AsyncSession) -> None:
