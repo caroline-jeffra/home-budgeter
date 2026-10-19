@@ -172,11 +172,13 @@ async def import_transactions(
     try:
         summary = await import_rows(session, account, lines, import_batch_id=batch.id)
     except NotImplementedError as exc:
+        await session.rollback()
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=str(exc),
         ) from exc
     except ValueError as exc:
+        await session.rollback()
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=str(exc),

@@ -3,6 +3,7 @@
 import hashlib
 import io
 from datetime import date
+from functools import partial
 from unittest.mock import ANY
 
 import pytest
@@ -454,6 +455,31 @@ async def test_import_malformed_row_persists_nothing(
         select(func.count()).select_from(Transaction).where(Transaction.account_id == account.id)
     )
     assert count == 0
+
+
+async def test_malformed_row_after_a_flush_persists_nothing(
+    client: AsyncClient, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Batches already flushed roll back with the bad one."""
+    account = await make_account(session, bank_name="abn_amro")
+    monkeypatch.setattr(main, "import_rows", partial(import_rows, batch_size=1))
+    lines = [HEADER, BEA_LINE, TRTP_LINE, "not,enough,fields"]
+
+    response = await client.post(
+        f"/accounts/{account.id}/import",
+        files=_csv_upload(lines),
+        headers=AUTH,
+    )
+
+    assert response.status_code == 422
+    count = await session.scalar(
+        select(func.count()).select_from(Transaction).where(Transaction.account_id == account.id)
+    )
+    assert count == 0
+    batches = await session.scalar(
+        select(func.count()).select_from(ImportBatch).where(ImportBatch.account_id == account.id)
+    )
+    assert batches == 0
 
 
 async def test_same_balance_and_amount_on_another_date_is_imported(
