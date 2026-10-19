@@ -1,6 +1,7 @@
 """CSV ingestion: a lazy pipeline to parse, normalize, dedup then persist."""
 
 import csv
+import io
 import re
 import unicodedata
 from collections import Counter
@@ -8,8 +9,9 @@ from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, replace
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
+from itertools import batched
 
-from sqlalchemy import select
+from sqlalchemy import select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Account, BankName, Transaction
@@ -89,6 +91,12 @@ class ParsedRow:
     def dedup_key(self) -> DedupKey:
         """The account-scoped part of the dedup key."""
         return (self.booked_on, self.balance_after_cents, self.amount_cents, self.occurrence)
+
+
+def open_text(raw: bytes) -> io.TextIOWrapper:
+    """Check `raw` decodes as UTF-8 up front, then stream it line by line."""
+    raw.decode("utf-8-sig")
+    return io.TextIOWrapper(io.BytesIO(raw), encoding="utf-8-sig", newline="")
 
 
 def parse(lines: Iterable[str], profile: ImportProfile) -> Iterator[ParsedRow]:
@@ -221,18 +229,18 @@ def dedup(rows: Iterator[ParsedRow], existing: set[DedupKey]) -> Iterator[Parsed
 
 
 async def existing_keys(
-    session: AsyncSession, account_id: int, start: date, end: date
+    session: AsyncSession, account_id: int, keys: list[DedupKey]
 ) -> set[DedupKey]:
-    """Load dedup keys already stored for this account in a date range."""
-    stmt = select(
+    """Return which of `keys` are already stored for this account."""
+    columns = (
         Transaction.booked_on,
         Transaction.balance_after_cents,
         Transaction.amount_cents,
         Transaction.occurrence,
-    ).where(
+    )
+    stmt = select(*columns).where(
         Transaction.account_id == account_id,
-        Transaction.balance_after_cents.is_not(None),
-        Transaction.booked_on.between(start, end),
+        tuple_(*columns).in_(keys),
     )
     result = await session.execute(stmt)
     return {(booked, balance, amount, occ) for booked, balance, amount, occ in result.all()}
@@ -254,34 +262,30 @@ async def import_rows(
             "(content hash + occurrence) is designed but not built."
         )
 
-    rows = list(assign_occurrences(normalize(parse(lines, profile))))
-    if not rows:
-        return ImportSummary(rows_read=0, inserted=0)
-
-    start = min(row.booked_on for row in rows)
-    end = max(row.booked_on for row in rows)
-    existing = await existing_keys(session, account.id, start, end)
-
+    rows_read = 0
     inserted = 0
-    for row in dedup(iter(rows), existing):
-        session.add(
-            Transaction(
-                account_id=account.id,
-                booked_on=row.booked_on,
-                amount_cents=row.amount_cents,
-                balance_before_cents=row.balance_before_cents,
-                balance_after_cents=row.balance_after_cents,
-                description=row.description,
-                raw_description=row.raw_description,
-                line_no=row.line_no,
-                occurrence=row.occurrence,
-                normalizer_version=NORMALIZER_VERSION,
-                import_batch_id=import_batch_id,
+    for chunk in batched(
+        assign_occurrences(normalize(parse(lines, profile))), batch_size, strict=False
+    ):
+        rows_read += len(chunk)
+        existing = await existing_keys(session, account.id, [row.dedup_key for row in chunk])
+        for row in dedup(iter(chunk), existing):
+            session.add(
+                Transaction(
+                    account_id=account.id,
+                    booked_on=row.booked_on,
+                    amount_cents=row.amount_cents,
+                    balance_before_cents=row.balance_before_cents,
+                    balance_after_cents=row.balance_after_cents,
+                    description=row.description,
+                    raw_description=row.raw_description,
+                    line_no=row.line_no,
+                    occurrence=row.occurrence,
+                    normalizer_version=NORMALIZER_VERSION,
+                    import_batch_id=import_batch_id,
+                )
             )
-        )
-        inserted += 1
-        if inserted % batch_size == 0:
-            await session.flush()
+            inserted += 1
+        await session.flush()
 
-    await session.flush()
-    return ImportSummary(rows_read=len(rows), inserted=inserted)
+    return ImportSummary(rows_read=rows_read, inserted=inserted)

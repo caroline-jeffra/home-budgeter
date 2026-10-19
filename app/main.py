@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth import require_auth
 from app.continuity import chain_breaks, classify, overlap_window
 from app.db import get_session
-from app.ingest import NORMALIZER_VERSION, import_rows
+from app.ingest import NORMALIZER_VERSION, import_rows, open_text
 from app.models import Account, Category, ImportBatch, Transaction, TransactionSplit
 from app.schemas import (
     AccountCreate,
@@ -131,7 +131,7 @@ async def import_transactions(
         )
 
     try:
-        text_body = raw.decode("utf-8-sig")
+        lines = open_text(raw)
     except UnicodeDecodeError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -170,9 +170,7 @@ async def import_transactions(
 
     before = await chain_breaks(session, account.id)
     try:
-        summary = await import_rows(
-            session, account, text_body.splitlines(), import_batch_id=batch.id
-        )
+        summary = await import_rows(session, account, lines, import_batch_id=batch.id)
     except NotImplementedError as exc:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
