@@ -3,6 +3,7 @@
 import hashlib
 import io
 from datetime import date
+from functools import partial
 from unittest.mock import ANY
 
 import pytest
@@ -24,6 +25,7 @@ from app.ingest import (
     import_rows,
     normalize,
     normalize_text,
+    open_text,
     parse,
 )
 from app.models import ImportBatch, Transaction
@@ -100,6 +102,23 @@ def test_parse_is_lazy() -> None:
     rows = parse([HEADER, BEA_LINE, "12345678,BROKEN,20260807"], ABN_AMRO)
     first = next(rows)
     assert first.amount_cents == -655
+
+
+def test_open_text_strips_the_bom() -> None:
+    raw = ("\ufeff" + "\r\n".join(TWO_ROWS)).encode("utf-8")
+    assert next(open_text(raw)).startswith("accountNumber")
+
+
+def test_open_text_rejects_non_utf8() -> None:
+    with pytest.raises(UnicodeDecodeError):
+        open_text("café".encode("cp1252"))
+
+
+def test_parse_reads_a_quoted_newline_from_open_text() -> None:
+    line = '12345678,EUR,20260809,20260809,100.00,50.00,-50.00,"Incasso\nGym"'
+    raw = "\r\n".join([HEADER, line]).encode("utf-8")
+    rows = list(parse(open_text(raw), ABN_AMRO))
+    assert [row.raw_description for row in rows] == ["Incasso\nGym"]
 
 
 def test_normalize_collapses_whitespace() -> None:
@@ -243,6 +262,19 @@ async def test_same_day_balance_revisit_is_imported(session: AsyncSession) -> No
 
     stored = (await session.scalars(select(Transaction).order_by(Transaction.line_no))).all()
     assert [t.occurrence for t in stored] == [0, 0, 1]
+
+
+async def test_reimport_matches_across_batches(session: AsyncSession) -> None:
+    """Occurrences survive chunking: each one-row batch finds its stored twin."""
+    account = await make_account(session, bank_name="abn_amro")
+    first = await make_import_batch(session, account)
+    second = await make_import_batch(session, account)
+    assert await import_rows(
+        session, account, REVISIT_ROWS, import_batch_id=first.id, batch_size=1
+    ) == ImportSummary(rows_read=3, inserted=3)
+    assert await import_rows(
+        session, account, REVISIT_ROWS, import_batch_id=second.id, batch_size=1
+    ) == ImportSummary(rows_read=3, inserted=0)
 
 
 async def test_import_endpoint_inserts_rows(client: AsyncClient, session: AsyncSession) -> None:
@@ -425,6 +457,31 @@ async def test_import_malformed_row_persists_nothing(
     assert count == 0
 
 
+async def test_malformed_row_after_a_flush_persists_nothing(
+    client: AsyncClient, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Batches already flushed roll back with the bad one."""
+    account = await make_account(session, bank_name="abn_amro")
+    monkeypatch.setattr(main, "import_rows", partial(import_rows, batch_size=1))
+    lines = [HEADER, BEA_LINE, TRTP_LINE, "not,enough,fields"]
+
+    response = await client.post(
+        f"/accounts/{account.id}/import",
+        files=_csv_upload(lines),
+        headers=AUTH,
+    )
+
+    assert response.status_code == 422
+    count = await session.scalar(
+        select(func.count()).select_from(Transaction).where(Transaction.account_id == account.id)
+    )
+    assert count == 0
+    batches = await session.scalar(
+        select(func.count()).select_from(ImportBatch).where(ImportBatch.account_id == account.id)
+    )
+    assert batches == 0
+
+
 async def test_same_balance_and_amount_on_another_date_is_imported(
     client: AsyncClient, session: AsyncSession
 ) -> None:
@@ -468,6 +525,24 @@ async def test_import_oversized_upload_is_413(
     )
 
     assert response.status_code == 413
+
+
+async def test_import_non_utf8_is_400(client: AsyncClient, session: AsyncSession) -> None:
+    """A file that is not UTF-8 is refused before any batch row is written."""
+    account = await make_account(session, bank_name="abn_amro")
+    body = "\r\n".join([HEADER, BEA_LINE.replace("Google", "Café")]).encode("cp1252")
+
+    response = await client.post(
+        f"/accounts/{account.id}/import",
+        files={"file": ("export.csv", io.BytesIO(body), "text/csv")},
+        headers=AUTH,
+    )
+
+    assert response.status_code == 400
+    count = await session.scalar(
+        select(func.count()).select_from(ImportBatch).where(ImportBatch.account_id == account.id)
+    )
+    assert count == 0
 
 
 async def test_import_integrity_error_is_409(
