@@ -6,7 +6,16 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from app.config import settings
 
-engine = create_async_engine(settings.database_url)
+CONNECTION_TIMEOUTS = (
+    "-c lock_timeout=5s "
+    "-c statement_timeout=30s "
+    "-c idle_in_transaction_session_timeout=60s"
+)
+
+engine = create_async_engine(
+    settings.database_url,
+    connect_args={"options": CONNECTION_TIMEOUTS},
+)
 
 SessionLocal = async_sessionmaker[AsyncSession](engine, expire_on_commit=False)
 
