@@ -13,8 +13,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth import require_auth
 from app.continuity import chain_breaks, classify, overlap_window
 from app.db import get_session
-from app.ingest import NORMALIZER_VERSION, import_rows, open_text
-from app.models import Account, Category, ImportBatch, Transaction, TransactionSplit
+from app.ingest import NORMALIZER_VERSION, PROFILES, import_rows, open_text
+from app.models import Account, BankName, Category, ImportBatch, Transaction, TransactionSplit
 from app.schemas import (
     AccountCreate,
     AccountRead,
@@ -130,12 +130,13 @@ async def import_transactions(
             gaps_closed=None,
         )
 
+    profile = PROFILES[BankName(account.bank_name)]
     try:
-        lines = open_text(raw)
+        lines = open_text(raw, profile)
     except UnicodeDecodeError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="File is not valid UTF-8",
+            detail="File is neither UTF-8 nor {profile.fallback_encoding or 'a known fallback'}",
         ) from exc
 
     # Released at commit or rollback.

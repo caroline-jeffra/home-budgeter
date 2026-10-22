@@ -33,6 +33,7 @@ class ImportProfile:
 
     name: str
     delimiter: str
+    fallback_encoding: str | None
     has_header: bool
     booked_on: int
     amount: int
@@ -46,6 +47,7 @@ class ImportProfile:
 ABN_AMRO = ImportProfile(
     name="ABN AMRO",
     delimiter=",",
+    fallback_encoding="cp1252",
     has_header=True,
     booked_on=2,
     amount=6,
@@ -93,10 +95,17 @@ class ParsedRow:
         return (self.booked_on, self.balance_after_cents, self.amount_cents, self.occurrence)
 
 
-def open_text(raw: bytes) -> io.TextIOWrapper:
-    """Check `raw` decodes as UTF-8 up front, then stream it line by line."""
-    raw.decode("utf-8-sig")
-    return io.TextIOWrapper(io.BytesIO(raw), encoding="utf-8-sig", newline="")
+def open_text(raw: bytes, profile: ImportProfile) -> io.TextIOWrapper:
+    """Pick the first encoding that decodes all of `raw`, then stream it line by line."""
+    encoding = "utf-8-sig"
+    try:    
+        raw.decode(encoding)
+    except UnicodeDecodeError:
+        if profile.fallback_encoding is None:
+            raise
+        encoding = profile.fallback_encoding
+        raw.decode(encoding)
+    return io.TextIOWrapper(io.BytesIO(raw), encoding=encoding, newline="")
 
 
 def parse(lines: Iterable[str], profile: ImportProfile) -> Iterator[ParsedRow]:

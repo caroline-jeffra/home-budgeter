@@ -2,6 +2,7 @@
 
 import hashlib
 import io
+from dataclasses import replace
 from datetime import date
 from functools import partial
 from unittest.mock import ANY
@@ -106,18 +107,34 @@ def test_parse_is_lazy() -> None:
 
 def test_open_text_strips_the_bom() -> None:
     raw = ("\ufeff" + "\r\n".join(TWO_ROWS)).encode("utf-8")
-    assert next(open_text(raw)).startswith("accountNumber")
+    assert next(open_text(raw, ABN_AMRO)).startswith("accountNumber")
 
 
-def test_open_text_rejects_non_utf8() -> None:
+def test_open_text_prefers_utf8() -> None:
+    """UTF-8 is tried first: read as cp1252, 'café' would garble to 'cafÃ©' without an error."""
+    assert next(open_text("café".encode(), ABN_AMRO)) == "café"
+
+
+def test_open_text_falls_back_to_the_profile_encoding() -> None:
+    assert next(open_text("café".encode("cp1252"), ABN_AMRO)) == "café"
+
+
+def test_open_text_without_a_fallback_rejects_non_utf8() -> None:
+    profile = replace(ABN_AMRO, fallback_encoding=None)
     with pytest.raises(UnicodeDecodeError):
-        open_text("café".encode("cp1252"))
+        open_text("café".encode("cp1252"), profile)
+
+
+def test_open_text_rejects_bytes_neither_encoding_decodes() -> None:
+    """0x81 is a stray UTF-8 continuation byte and unassigned in cp1252."""
+    with pytest.raises(UnicodeDecodeError):
+        open_text(b"caf\x81", ABN_AMRO)
 
 
 def test_parse_reads_a_quoted_newline_from_open_text() -> None:
     line = '12345678,EUR,20260809,20260809,100.00,50.00,-50.00,"Incasso\nGym"'
     raw = "\r\n".join([HEADER, line]).encode("utf-8")
-    rows = list(parse(open_text(raw), ABN_AMRO))
+    rows = list(parse(open_text(raw, ABN_AMRO), ABN_AMRO))
     assert [row.raw_description for row in rows] == ["Incasso\nGym"]
 
 
@@ -527,10 +544,30 @@ async def test_import_oversized_upload_is_413(
     assert response.status_code == 413
 
 
-async def test_import_non_utf8_is_400(client: AsyncClient, session: AsyncSession) -> None:
-    """A file that is not UTF-8 is refused before any batch row is written."""
+async def test_import_cp1252_file_is_imported(client: AsyncClient, session: AsyncSession) -> None:
+    """A cp1252 export decodes through the profile's fallback and keeps its accents."""
     account = await make_account(session, bank_name="abn_amro")
     body = "\r\n".join([HEADER, BEA_LINE.replace("Google", "Café")]).encode("cp1252")
+
+    response = await client.post(
+        f"/accounts/{account.id}/import",
+        files={"file": ("export.csv", io.BytesIO(body), "text/csv")},
+        headers=AUTH,
+    )
+
+    assert response.status_code == 200
+    assert response.json()["inserted"] == 1
+    raw_description = await session.scalar(
+        select(Transaction.raw_description).where(Transaction.account_id == account.id)
+    )
+    assert raw_description is not None
+    assert "Café Pay" in raw_description
+
+
+async def test_import_undecodable_file_is_400(client: AsyncClient, session: AsyncSession) -> None:
+    """A file neither UTF-8 nor the fallback decodes is refused before any batch row is written."""
+    account = await make_account(session, bank_name="abn_amro")
+    body = "\r\n".join([HEADER, BEA_LINE]).encode() + b"\x81"
 
     response = await client.post(
         f"/accounts/{account.id}/import",
