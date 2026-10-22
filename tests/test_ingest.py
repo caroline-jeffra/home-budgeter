@@ -19,6 +19,7 @@ from app.db import engine
 from app.ingest import (
     ABN_AMRO,
     NOISE_WORDS,
+    ImportProfile,
     ImportSummary,
     ParsedRow,
     assign_occurrences,
@@ -28,6 +29,7 @@ from app.ingest import (
     normalize_text,
     open_text,
     parse,
+    parse_cents,
 )
 from app.models import ImportBatch, Transaction
 from app.void import void_batch
@@ -96,6 +98,69 @@ def test_parse_rejects_a_broken_balance() -> None:
 def test_parse_rejects_a_short_row() -> None:
     with pytest.raises(ValueError, match="line 2"):
         list(parse([HEADER, "12345678,EUR,20260807"], ABN_AMRO))
+
+
+# A test-only variant in the Dutch style: `1.234,56`, semicolon-delimited (P2-D6).
+DUTCH_STYLE = replace(ABN_AMRO, delimiter=";", decimal_separator=",", thousands_separator=".")
+
+
+@pytest.mark.parametrize(
+    ("profile", "raw", "cents"),
+    [
+        (ABN_AMRO, "1234.56", 123456),
+        (ABN_AMRO, "-6.55", -655),
+        (ABN_AMRO, "+150.00", 15000),
+        (ABN_AMRO, "150", 15000),
+        (ABN_AMRO, "0.5", 50),
+        (ABN_AMRO, " 12.30 ", 1230),
+        (DUTCH_STYLE, "1.234,56", 123456),
+        (DUTCH_STYLE, "-1.234.567,89", -123456789),
+        (DUTCH_STYLE, "1234,56", 123456),
+        (DUTCH_STYLE, "999,99", 99999),
+    ],
+)
+def test_parse_cents_reads_the_profile_format(profile: ImportProfile, raw: str, cents: int) -> None:
+    assert parse_cents(raw, profile) == cents
+
+
+@pytest.mark.parametrize(
+    ("profile", "raw"),
+    [
+        # Dot-decimal under a comma-decimal profile: stripping '.' would read 100x too much.
+        (DUTCH_STYLE, "1234.56"),
+        # Sub-cent precision: truncating would silently drop money.
+        (ABN_AMRO, "12.345"),
+        # Grouping in a profile with no thousands separator.
+        (ABN_AMRO, "1,234.56"),
+        # Groups must be exactly three digits.
+        (DUTCH_STYLE, "1.23,45"),
+        (DUTCH_STYLE, "1.2345,67"),
+        (ABN_AMRO, ""),
+        (ABN_AMRO, "12.34EUR"),
+    ],
+)
+def test_parse_cents_rejects_a_foreign_format(profile: ImportProfile, raw: str) -> None:
+    with pytest.raises(ValueError, match=repr(raw)):
+        parse_cents(raw, profile)
+
+
+def test_parse_reads_a_dutch_style_row() -> None:
+    header = HEADER.replace(",", ";")
+    line = "12345678;EUR;20260807;20260807;1.197,15;1.190,60;-6,55;Kiosk, Amsterdam"
+    [row] = parse([header, line], DUTCH_STYLE)
+    assert (row.balance_before_cents, row.amount_cents, row.balance_after_cents) == (
+        119715,
+        -655,
+        119060,
+    )
+    assert row.raw_description == "Kiosk, Amsterdam"
+
+
+def test_parse_reports_a_foreign_amount_with_its_line() -> None:
+    """A dot-decimal export under a comma-decimal profile is a 422-able error, not a 100x amount."""
+    line = "12345678;EUR;20260807;20260807;197.15;190.60;-6.55;Kiosk"
+    with pytest.raises(ValueError, match="line 2"):
+        list(parse([HEADER.replace(",", ";"), line], DUTCH_STYLE))
 
 
 def test_parse_is_lazy() -> None:

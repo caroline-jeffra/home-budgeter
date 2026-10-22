@@ -17,11 +17,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import Account, BankName, Transaction
 
 
-def _cents_decimal_point(raw: str) -> int:
-    """Convert an amount like '1234.56' to 123456."""
-    return int(Decimal(raw.strip()) * 100)
-
-
 def _date_yyyymmdd(raw: str) -> date:
     """Convert a date like '20260315' to a date object."""
     return datetime.strptime(raw.strip(), "%Y%m%d").date()
@@ -41,7 +36,18 @@ class ImportProfile:
     balance_after: int | None
     description: int
     parse_date: Callable[[str], date]
-    parse_amount: Callable[[str], int]
+    decimal_separator: str
+    thousands_separator: str | None
+
+    @property
+    def amount_pattern(self) -> re.Pattern[str]:
+        """What a valid amount looks like: optional sign, whole part, up to two decimals."""
+        whole = r"\d+"
+        if self.thousands_separator is not None:
+            group = re.escape(self.thousands_separator)
+            whole = rf"(?:\d{{1,3}}(?:{group}\d{{3}})+|\d+)"
+        point = re.escape(self.decimal_separator)
+        return re.compile(rf"[+-]?{whole}(?:{point}\d{{1,2}})?")
 
 
 ABN_AMRO = ImportProfile(
@@ -55,7 +61,8 @@ ABN_AMRO = ImportProfile(
     balance_after=5,
     description=7,
     parse_date=_date_yyyymmdd,
-    parse_amount=_cents_decimal_point,
+    decimal_separator=".",
+    thousands_separator=None,
 )
 
 PROFILES: dict[BankName, ImportProfile] = {BankName.ABN_AMRO: ABN_AMRO}
@@ -63,6 +70,17 @@ if set(PROFILES) != set(BankName):
     raise RuntimeError(
         f"BankName members without an ImportProfile: {set(BankName) - set(PROFILES)}"
     )
+
+
+def parse_cents(raw: str, profile: ImportProfile) -> int:
+    """Convert an amount in `profile`'s format, like '-1.234,56', to cents."""
+    value = raw.strip()
+    if not profile.amount_pattern.fullmatch(value):
+        raise ValueError(f"amount {raw!r} is not in {profile.name}'s format")
+    if profile.thousands_separator is not None:
+        value = value.replace(profile.thousands_separator, "")
+    value = value.replace(profile.decimal_separator, ".")
+    return int(Decimal(value) * 100)
 
 
 @dataclass(frozen=True)
@@ -131,18 +149,18 @@ def parse(lines: Iterable[str], profile: ImportProfile) -> Iterator[ParsedRow]:
         try:
             row = ParsedRow(
                 booked_on=profile.parse_date(fields[profile.booked_on]),
-                amount_cents=profile.parse_amount(fields[profile.amount]),
+                amount_cents=parse_cents(fields[profile.amount], profile),
                 balance_after_cents=(
                     None
                     if profile.balance_after is None
-                    else profile.parse_amount(fields[profile.balance_after])
+                    else parse_cents(fields[profile.balance_after], profile)
                 ),
                 description=fields[profile.description],
                 raw_description=fields[profile.description],
                 balance_before_cents=(
                     None
                     if profile.balance_before is None
-                    else profile.parse_amount(fields[profile.balance_before])
+                    else parse_cents(fields[profile.balance_before], profile)
                 ),
                 line_no=lineno,
             )
