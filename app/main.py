@@ -128,6 +128,9 @@ async def import_transactions(
             already_imported=True,
             gaps_opened=None,
             gaps_closed=None,
+            cosmetic_matches=existing.cosmetic_matches,
+            real_disagreements=existing.real_disagreements,
+            disagreements=None,
         )
 
     profile = PROFILES[BankName(account.bank_name)]
@@ -158,6 +161,8 @@ async def import_transactions(
         rows_read=0,
         inserted=0,
         skipped=0,
+        cosmetic_matches=0,
+        real_disagreements=0,
     )
     session.add(batch)
     try:
@@ -220,6 +225,8 @@ async def import_transactions(
     batch.rows_read = summary.rows_read
     batch.inserted = summary.inserted
     batch.skipped = summary.rows_read - summary.inserted
+    batch.cosmetic_matches = summary.cosmetic
+    batch.real_disagreements = len(summary.disagreements)
     await session.commit()
     return ImportResult(
         account_id=account.id,
@@ -230,6 +237,9 @@ async def import_transactions(
         already_imported=False,
         gaps_opened=report.gaps_opened,
         gaps_closed=report.gaps_closed,
+        cosmetic_matches=batch.cosmetic_matches,
+        real_disagreements=batch.real_disagreements,
+        disagreements=list(summary.disagreements),
     )
 
 

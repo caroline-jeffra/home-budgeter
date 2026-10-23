@@ -123,6 +123,8 @@ class ImportBatch(Base):
     rows_read: Mapped[int]
     inserted: Mapped[int]
     skipped: Mapped[int]
+    cosmetic_matches: Mapped[int] = mapped_column(server_default="0")
+    real_disagreements: Mapped[int] = mapped_column(server_default="0")
     voided_at: Mapped[datetime | None]
     void_reason: Mapped[str | None]
 
