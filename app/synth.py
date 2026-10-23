@@ -6,6 +6,7 @@ import random
 from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass, replace
 from datetime import date, timedelta
+from itertools import accumulate
 
 from app.ingest import ABN_AMRO, ImportProfile, normalize_text
 
@@ -42,21 +43,57 @@ class SynthRow:
     description: str
 
 
+@dataclass(frozen=True)
+class Distribution:
+    """How generated rows are spread: dates, directions, amounts and merchants."""
+
+    rows_per_day: float = 2.5
+    income_share: float = 0.1
+    income_cents: tuple[int, int] = (20_000, 300_000)
+    spend_cents: tuple[int, int] = (1, 15_000)
+    merchants: tuple[tuple[str, float], ...] = tuple((name, 1.0) for name in MERCHANTS)
+
+    def __post_init__(self) -> None:
+        if self.rows_per_day < 1:
+            raise ValueError(f"rows_per_day must be at least 1, got {self.rows_per_day}")
+        if not 0 <= self.income_share <= 1:
+            raise ValueError(f"income_share must be between 0 and 1, got {self.income_share}")
+        for field, (low, high) in (
+            ("income_cents", self.income_cents),
+            ("spend_cents", self.spend_cents),
+        ):
+            if not 1 <= low <= high:
+                raise ValueError(f"{field} must satisfy 1 <= low <= high, got {(low, high)}")
+        if not self.merchants or any(weight <= 0 for _, weight in self.merchants):
+            raise ValueError("merchants needs at least one entry, each with a positive weight")
+
+
+DEFAULT_DISTRIBUTION = Distribution()
+
+
 def generate(
-    seed: int, count: int, start: date, opening_cents: int = 100_000
+    seed: int,
+    count: int,
+    start: date,
+    opening_cents: int = 100_000,
+    distribution: Distribution = DEFAULT_DISTRIBUTION,
 ) -> Iterator[SynthRow]:
-    """Yield `count` chained rows from `start`: the same rows for the same seed."""
+    """Yield `count` chained rows from `start`: the same rows for the same seed and spread."""
     rng = random.Random(seed)
+    names = [name for name, _ in distribution.merchants]
+    cum_weights = list(accumulate(weight for _, weight in distribution.merchants))
+    next_day = 1 / distribution.rows_per_day
     booked_on = start
     balance = opening_cents
     for _ in range(count):
-        if rng.random() < 0.1:
-            amount, description = rng.randint(20_000, 300_000), INCOME
+        if rng.random() < distribution.income_share:
+            amount, description = rng.randint(*distribution.income_cents), INCOME
         else:
-            amount, description = -rng.randint(1, 15_000), rng.choice(MERCHANTS)
+            amount = -rng.randint(*distribution.spend_cents)
+            [description] = rng.choices(names, cum_weights=cum_weights)
         yield SynthRow(booked_on, balance, amount, balance + amount, description)
         balance += amount
-        if rng.random() < 0.4:
+        if rng.random() < next_day:
             booked_on += timedelta(days=1)
 
 

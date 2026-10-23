@@ -6,6 +6,7 @@ from collections.abc import Iterable
 from dataclasses import replace
 from datetime import date, datetime, timedelta
 from itertools import islice, pairwise
+from typing import Any
 from unittest.mock import ANY
 
 import pytest
@@ -27,6 +28,7 @@ from app.ingest import (
 )
 from app.models import Transaction
 from app.synth import (
+    Distribution,
     SynthRow,
     cosmetic,
     fork,
@@ -470,3 +472,83 @@ async def test_a_generated_cp1252_file_imports_through_the_endpoint(
         )
     )
     assert stored == {row.description for row in rows}
+
+
+# Distribution: how rows are spread. Defaults keep the generator's original even spread;
+# realistic values are Phase 4's (Q12).
+
+
+def test_generate_uses_the_default_distribution() -> None:
+    assert list(generate(seed=41, count=200, start=START)) == list(
+        generate(seed=41, count=200, start=START, distribution=Distribution())
+    )
+
+
+def test_a_custom_distribution_is_still_deterministic() -> None:
+    spread = Distribution(rows_per_day=6, income_share=0.3)
+    first = list(generate(seed=41, count=200, start=START, distribution=spread))
+    assert list(generate(seed=41, count=200, start=START, distribution=spread)) == first
+
+
+def _rows_per_day(rows: list[SynthRow]) -> float:
+    days = (rows[-1].booked_on - rows[0].booked_on).days + 1
+    return len(rows) / days
+
+
+def test_one_row_per_day_books_every_row_on_its_own_day() -> None:
+    spread = Distribution(rows_per_day=1)
+    rows = list(generate(seed=42, count=100, start=START, distribution=spread))
+    assert [row.booked_on for row in rows] == [START + timedelta(days=n) for n in range(100)]
+
+
+@pytest.mark.parametrize("rows_per_day", [2.5, 4, 10])
+def test_rows_per_day_sets_the_average(rows_per_day: float) -> None:
+    spread = Distribution(rows_per_day=rows_per_day)
+    rows = list(generate(seed=42, count=5_000, start=START, distribution=spread))
+    assert _rows_per_day(rows) == pytest.approx(rows_per_day, rel=0.1)
+
+
+@pytest.mark.parametrize("income_share", [0, 0.3, 1])
+def test_income_share_sets_the_share_of_incoming_rows(income_share: float) -> None:
+    spread = Distribution(income_share=income_share)
+    rows = list(generate(seed=43, count=5_000, start=START, distribution=spread))
+    incoming = sum(row.amount_cents > 0 for row in rows) / len(rows)
+    assert incoming == pytest.approx(income_share, abs=0.03)
+
+
+def test_amounts_stay_inside_their_ranges() -> None:
+    spread = Distribution(income_share=0.5, income_cents=(500, 600), spend_cents=(10, 20))
+    rows = generate(seed=44, count=2_000, start=START, distribution=spread)
+    amounts = [row.amount_cents for row in rows]
+    incoming = [amount for amount in amounts if amount > 0]
+    outgoing = [amount for amount in amounts if amount < 0]
+    # Both ends of each range are reachable, and nothing falls outside them.
+    assert (min(incoming), max(incoming)) == (500, 600)
+    assert (min(outgoing), max(outgoing)) == (-20, -10)
+
+
+def test_merchant_weights_set_each_merchants_share() -> None:
+    spread = Distribution(income_share=0, merchants=(("Big", 8), ("Small", 2)))
+    rows = list(generate(seed=45, count=5_000, start=START, distribution=spread))
+    big = sum(row.description == "Big" for row in rows) / len(rows)
+    assert big == pytest.approx(0.8, abs=0.03)
+    assert {row.description for row in rows} == {"Big", "Small"}
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"rows_per_day": 0.5},  # fewer than one row a day: the date could not advance fast enough
+        {"income_share": -0.1},
+        {"income_share": 1.5},
+        {"income_cents": (0, 100)},  # a zero amount
+        {"income_cents": (100, 50)},  # low above high
+        {"spend_cents": (0, 100)},
+        {"merchants": ()},
+        {"merchants": (("Shop", 0),)},
+    ],
+    ids=str,
+)
+def test_distribution_rejects_an_impossible_spread(fields: dict[str, Any]) -> None:
+    with pytest.raises(ValueError):
+        Distribution(**fields)
