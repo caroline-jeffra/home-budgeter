@@ -387,6 +387,9 @@ async def test_import_endpoint_inserts_rows(client: AsyncClient, session: AsyncS
             }
         ],
         "gaps_closed": [],
+        "cosmetic_matches": 0,
+        "real_disagreements": 0,
+        "disagreements": [],
     }
 
     count = await session.scalar(
@@ -420,6 +423,9 @@ async def test_import_endpoint_is_idempotent(client: AsyncClient, session: Async
         "already_imported": True,
         "gaps_opened": None,
         "gaps_closed": None,
+        "cosmetic_matches": 0,
+        "real_disagreements": 0,
+        "disagreements": None,
     }
 
     count = await session.scalar(

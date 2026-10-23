@@ -9,6 +9,7 @@ from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, replace
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
+from enum import StrEnum
 from itertools import batched
 
 from sqlalchemy import select, tuple_
@@ -84,11 +85,24 @@ def parse_cents(raw: str, profile: ImportProfile) -> int:
 
 
 @dataclass(frozen=True)
+class Disagreement:
+    """A matched row whose incoming description really differs from the stored one."""
+
+    booked_on: date
+    amount_cents: int
+    line_no: int | None
+    stored_description: str
+    incoming_description: str
+
+
+@dataclass(frozen=True)
 class ImportSummary:
-    """How many rows a file held, and how many were new."""
+    """How many rows a file held, how many were new, and how matches compared."""
 
     rows_read: int
     inserted: int
+    cosmetic: int = 0
+    disagreements: tuple[Disagreement, ...] = ()
 
 
 DedupKey = tuple[date, int | None, int, int]
@@ -230,6 +244,24 @@ def normalize_text(text: str) -> str:
     return " ".join(token for token in folded.split() if not _is_noise(token))
 
 
+class MatchKind(StrEnum):
+    """How an incoming row's description compares with the stored row it matched."""
+
+    EXACT = "exact"
+    COSMETIC = "cosmetic"
+    REAL = "real"
+
+
+def match_kind(stored_raw: str, incoming_raw: str) -> MatchKind:
+    """Compare raw texts, then both re-normalized with today's rules; empty agrees with nothing."""
+    if stored_raw == incoming_raw:
+        return MatchKind.EXACT
+    normalized = normalize_text(stored_raw)
+    if normalized and normalized == normalize_text(incoming_raw):
+        return MatchKind.COSMETIC
+    return MatchKind.REAL
+
+
 def normalize(rows: Iterator[ParsedRow]) -> Iterator[ParsedRow]:
     """Normalize each row's description from its raw text."""
     for row in rows:
@@ -245,7 +277,7 @@ def assign_occurrences(rows: Iterator[ParsedRow]) -> Iterator[ParsedRow]:
         counts[same] += 1
 
 
-def dedup(rows: Iterator[ParsedRow], existing: set[DedupKey]) -> Iterator[ParsedRow]:
+def dedup(rows: Iterator[ParsedRow], existing: Iterable[DedupKey]) -> Iterator[ParsedRow]:
     """Drop rows already stored, and duplicates within this file."""
     seen = set(existing)
     for row in rows:
@@ -255,22 +287,24 @@ def dedup(rows: Iterator[ParsedRow], existing: set[DedupKey]) -> Iterator[Parsed
         yield row
 
 
-async def existing_keys(
+async def stored_descriptions(
     session: AsyncSession, account_id: int, keys: list[DedupKey]
-) -> set[DedupKey]:
-    """Return which of `keys` are already stored for this account."""
+) -> dict[DedupKey, str]:
+    """Return the stored raw description for each of `keys` already in this account."""
     columns = (
         Transaction.booked_on,
         Transaction.balance_after_cents,
         Transaction.amount_cents,
         Transaction.occurrence,
     )
-    stmt = select(*columns).where(
+    stmt = select(*columns, Transaction.raw_description).where(
         Transaction.account_id == account_id,
         tuple_(*columns).in_(keys),
     )
     result = await session.execute(stmt)
-    return {(booked, balance, amount, occ) for booked, balance, amount, occ in result.all()}
+    return {
+        (booked, balance, amount, occ): raw for booked, balance, amount, occ, raw in result.all()
+    }
 
 
 async def import_rows(
@@ -291,12 +325,31 @@ async def import_rows(
 
     rows_read = 0
     inserted = 0
+    cosmetic = 0
+    disagreements: list[Disagreement] = []
     for chunk in batched(
         assign_occurrences(normalize(parse(lines, profile))), batch_size, strict=False
     ):
         rows_read += len(chunk)
-        existing = await existing_keys(session, account.id, [row.dedup_key for row in chunk])
-        for row in dedup(iter(chunk), existing):
+        stored = await stored_descriptions(session, account.id, [row.dedup_key for row in chunk])
+        for row in chunk:
+            stored_raw = stored.get(row.dedup_key)
+            if stored_raw is None:
+                continue
+            kind = match_kind(stored_raw, row.raw_description)
+            if kind is MatchKind.COSMETIC:
+                cosmetic += 1
+            elif kind is MatchKind.REAL:
+                disagreements.append(
+                    Disagreement(
+                        booked_on=row.booked_on,
+                        amount_cents=row.amount_cents,
+                        line_no=row.line_no,
+                        stored_description=stored_raw,
+                        incoming_description=row.raw_description,
+                    )
+                )
+        for row in dedup(iter(chunk), stored.keys()):
             session.add(
                 Transaction(
                     account_id=account.id,
@@ -315,4 +368,9 @@ async def import_rows(
             inserted += 1
         await session.flush()
 
-    return ImportSummary(rows_read=rows_read, inserted=inserted)
+    return ImportSummary(
+        rows_read=rows_read,
+        inserted=inserted,
+        cosmetic=cosmetic,
+        disagreements=tuple(disagreements),
+    )

@@ -5,6 +5,7 @@ from datetime import date
 from pydantic import BaseModel, ConfigDict
 
 from app.continuity import ChainBreak
+from app.ingest import Disagreement
 from app.models import BankName
 
 
@@ -67,6 +68,7 @@ class TransactionRead(BaseModel):
     booked_on: date
     amount_cents: int
     description: str
+    raw_description: str
 
 
 class ImportResult(BaseModel):
@@ -80,6 +82,9 @@ class ImportResult(BaseModel):
     already_imported: bool
     gaps_opened: list[ChainBreak] | None
     gaps_closed: list[ChainBreak] | None
+    cosmetic_matches: int
+    real_disagreements: int
+    disagreements: list[Disagreement] | None
 
 
 class ReconciliationRead(BaseModel):
