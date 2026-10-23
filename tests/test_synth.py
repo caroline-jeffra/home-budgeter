@@ -1,8 +1,10 @@
 """Tests for the synthetic export generator: seeded, deterministic, with valid balance chains."""
 
+import io
 import random
+from collections.abc import Iterable
 from dataclasses import replace
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from itertools import islice, pairwise
 from unittest.mock import ANY
 
@@ -16,8 +18,10 @@ from app.ingest import (
     ABN_AMRO,
     ImportProfile,
     ImportSummary,
+    ParsedRow,
     import_rows,
     normalize_text,
+    open_text,
     parse,
     parse_cents,
 )
@@ -32,10 +36,11 @@ from app.synth import (
     overlap,
     render,
     reword,
+    to_bytes,
 )
 from tests.factories import make_account, make_import_batch
 from tests.test_continuity import _upload
-from tests.test_ingest import DUTCH_STYLE, HEADER
+from tests.test_ingest import AUTH, DUTCH_STYLE, HEADER
 
 START = date(2026, 1, 1)
 
@@ -163,22 +168,26 @@ def test_render_writes_an_abn_amro_line() -> None:
     )
 
 
+Fields = tuple[date, int | None, int, int | None, str]
+
+
+def _fields(rows: Iterable[SynthRow | ParsedRow]) -> list[Fields]:
+    """What a generated row and its parsed line must agree on."""
+    return [
+        (
+            row.booked_on,
+            row.balance_before_cents,
+            row.amount_cents,
+            row.balance_after_cents,
+            row.raw_description if isinstance(row, ParsedRow) else row.description,
+        )
+        for row in rows
+    ]
+
+
 def test_render_round_trips_through_parse() -> None:
     rows = list(generate(seed=5, count=300, start=START))
-    parsed = list(parse(render(rows), ABN_AMRO))
-    assert [
-        (
-            p.booked_on,
-            p.balance_before_cents,
-            p.amount_cents,
-            p.balance_after_cents,
-            p.raw_description,
-        )
-        for p in parsed
-    ] == [
-        (r.booked_on, r.balance_before_cents, r.amount_cents, r.balance_after_cents, r.description)
-        for r in rows
-    ]
+    assert _fields(parse(render(rows), ABN_AMRO)) == _fields(rows)
 
 
 def test_render_is_lazy() -> None:
@@ -382,3 +391,82 @@ async def test_overlapping_files_import_each_row_once_with_no_gaps(
     assert response.json()["inserted"] == 80
     assert response.json()["gaps_opened"] == []
     assert await chain_breaks(session, account_id) == []
+
+
+# P2-D6 format variants: test-only profiles the generator writes and the parser must read.
+
+
+def _date_ddmmyyyy(raw: str) -> date:
+    return datetime.strptime(raw.strip(), "%d-%m-%Y").date()
+
+
+VARIANTS = {
+    "semicolon": (replace(ABN_AMRO, delimiter=";"), "%Y%m%d", "utf-8"),
+    "dutch_decimals": (
+        replace(ABN_AMRO, decimal_separator=",", thousands_separator="."),
+        "%Y%m%d",
+        "utf-8",
+    ),
+    "day_first": (replace(ABN_AMRO, parse_date=_date_ddmmyyyy), "%d-%m-%Y", "utf-8"),
+    "cp1252": (ABN_AMRO, "%Y%m%d", "cp1252"),
+    "all_at_once": (replace(DUTCH_STYLE, parse_date=_date_ddmmyyyy), "%d-%m-%Y", "cp1252"),
+}
+
+
+def test_generate_writes_some_non_ascii_descriptions() -> None:
+    """Without one, a cp1252 file is byte-for-byte UTF-8 and the fallback is never tried."""
+    assert any(not row.description.isascii() for row in generate(seed=31, count=300, start=START))
+
+
+def test_render_writes_the_date_format_it_is_given() -> None:
+    [row] = _chain(-655)
+    [_, line] = render([row], date_format="%d-%m-%Y")
+    assert line.startswith("12345678,EUR,01-01-2026,01-01-2026,")
+
+
+def test_to_bytes_joins_lines_with_crlf() -> None:
+    assert to_bytes(["a", "b"]) == b"a\r\nb"
+
+
+def test_to_bytes_encodes_with_the_encoding_given() -> None:
+    assert to_bytes(["Café"], "cp1252") == b"Caf\xe9"
+
+
+def test_a_cp1252_file_is_not_utf8() -> None:
+    """So decoding it really does go through the profile's fallback encoding."""
+    body = to_bytes(render(generate(seed=31, count=300, start=START)), "cp1252")
+    with pytest.raises(UnicodeDecodeError):
+        body.decode("utf-8")
+
+
+@pytest.mark.parametrize(("profile", "date_format", "encoding"), VARIANTS.values(), ids=VARIANTS)
+def test_a_variant_file_round_trips_through_open_text_and_parse(
+    profile: ImportProfile, date_format: str, encoding: str
+) -> None:
+    rows = list(generate(seed=31, count=300, start=START))
+    body = to_bytes(render(rows, profile, date_format=date_format), encoding)
+    assert _fields(parse(open_text(body, profile), profile)) == _fields(rows)
+
+
+async def test_a_generated_cp1252_file_imports_through_the_endpoint(
+    client: AsyncClient, session: AsyncSession
+) -> None:
+    account = await make_account(session)
+    account_id = account.id
+    rows = list(generate(seed=31, count=300, start=START))
+    body = to_bytes(render(rows), "cp1252")
+
+    response = await client.post(
+        f"/accounts/{account_id}/import",
+        files={"file": ("export.csv", io.BytesIO(body), "text/csv")},
+        headers=AUTH,
+    )
+
+    assert response.status_code == 200
+    assert response.json()["inserted"] == 300
+    stored = set(
+        await session.scalars(
+            select(Transaction.raw_description).where(Transaction.account_id == account_id)
+        )
+    )
+    assert stored == {row.description for row in rows}

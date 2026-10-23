@@ -21,9 +21,10 @@ HEADER = (
     "description",
 )
 
-# One holds the delimiter, so every file exercises quoting.
+# One holds the delimiter, so every file exercises quoting; one is non-ASCII, so cp1252 differs.
 MERCHANTS = (
     "BEA, Google Pay  ALBERT HEIJN 1234,PAS410",
+    "BEA, Google Pay  Café de Jaren,PAS410",
     "/TRTP/SEPA Incasso algemeen doorlopend/NAME/Vattenfall",
     "/TRTP/iDEAL/NAME/Bol.com",
 )
@@ -76,11 +77,13 @@ def _line(fields: Iterable[str], delimiter: str) -> str:
     return buffer.getvalue()
 
 
-def render(rows: Iterable[SynthRow], profile: ImportProfile = ABN_AMRO) -> Iterator[str]:
-    """Write rows as ABN AMRO export lines, header first, amounts in `profile`'s format."""
+def render(
+    rows: Iterable[SynthRow], profile: ImportProfile = ABN_AMRO, date_format: str = "%Y%m%d"
+) -> Iterator[str]:
+    """Write rows as ABN AMRO export lines, header first, amounts in `profile`'s number format."""
     yield _line(HEADER, profile.delimiter)
     for row in rows:
-        day = row.booked_on.strftime("%Y%m%d")
+        day = row.booked_on.strftime(date_format)
         yield _line(
             (
                 ACCOUNT_NUMBER,
@@ -94,6 +97,11 @@ def render(rows: Iterable[SynthRow], profile: ImportProfile = ABN_AMRO) -> Itera
             ),
             profile.delimiter,
         )
+
+
+def to_bytes(lines: Iterable[str], encoding: str = "utf-8") -> bytes:
+    """Join lines into an export file's bytes, CRLF-separated."""
+    return "\r\n".join(lines).encode(encoding)
 
 
 def gap(rows: Sequence[SynthRow], start: int, length: int) -> list[SynthRow]:
