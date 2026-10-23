@@ -1,19 +1,68 @@
 """Tests for the synthetic export generator: seeded, deterministic, with valid balance chains."""
 
 import random
-from datetime import date
+from dataclasses import replace
+from datetime import date, timedelta
 from itertools import islice, pairwise
+from unittest.mock import ANY
 
 import pytest
+from httpx import AsyncClient
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.continuity import chain_breaks
-from app.ingest import ABN_AMRO, ImportProfile, ImportSummary, import_rows, parse, parse_cents
-from app.synth import SynthRow, format_cents, generate, render
+from app.ingest import (
+    ABN_AMRO,
+    ImportProfile,
+    ImportSummary,
+    import_rows,
+    normalize_text,
+    parse,
+    parse_cents,
+)
+from app.models import Transaction
+from app.synth import (
+    SynthRow,
+    cosmetic,
+    fork,
+    format_cents,
+    gap,
+    generate,
+    overlap,
+    render,
+    reword,
+)
 from tests.factories import make_account, make_import_batch
+from tests.test_continuity import _upload
 from tests.test_ingest import DUTCH_STYLE, HEADER
 
 START = date(2026, 1, 1)
+
+
+def _chain(*amounts: int, opening: int = 10_000) -> list[SynthRow]:
+    """Hand-built rows, one a day from START, each opening where the last closed."""
+    rows: list[SynthRow] = []
+    balance = opening
+    for day, amount in enumerate(amounts):
+        rows.append(
+            SynthRow(
+                booked_on=START + timedelta(days=day),
+                balance_before_cents=balance,
+                amount_cents=amount,
+                balance_after_cents=balance + amount,
+                description=f"Shop {day}",
+            )
+        )
+        balance += amount
+    return rows
+
+
+def _assert_chained(rows: list[SynthRow]) -> None:
+    for row in rows:
+        assert row.balance_before_cents + row.amount_cents == row.balance_after_cents
+    for previous, row in pairwise(rows):
+        assert row.balance_before_cents == previous.balance_after_cents
 
 
 def test_generate_yields_count_rows() -> None:
@@ -149,3 +198,187 @@ async def test_a_generated_file_imports_with_an_unbroken_chain(session: AsyncSes
 
     again = await import_rows(session, account, lines, import_batch_id=second.id)
     assert again == ImportSummary(rows_read=1_200, inserted=0)
+
+
+# Mutators: each takes a clean chain and introduces exactly one fault.
+
+
+def test_gap_drops_a_run_of_rows() -> None:
+    rows = _chain(-100, -200, -300, -400, -500)
+    assert gap(rows, start=1, length=2) == [rows[0], rows[3], rows[4]]
+
+
+def test_mutators_leave_their_input_alone() -> None:
+    rows = _chain(-100, -200, -300, -400, -500)
+    untouched = list(rows)
+    gap(rows, start=1, length=2)
+    fork(rows, index=1, amount_cents=-250)
+    cosmetic(rows, index=1)
+    reword(rows, index=1, description="Jumbo Amsterdam")
+    overlap(rows, first_end=3, second_start=1)
+    assert rows == untouched
+
+
+@pytest.mark.parametrize(
+    ("start", "length"),
+    [
+        (0, 1),  # nothing before the gap: the file just opens later
+        (3, 2),  # nothing after the gap: the file just closes earlier
+        (1, 0),  # no rows dropped
+    ],
+)
+def test_gap_needs_rows_on_both_sides(start: int, length: int) -> None:
+    with pytest.raises(ValueError):
+        gap(_chain(-100, -200, -300, -400, -500), start=start, length=length)
+
+
+def test_gap_rejects_a_run_that_nets_to_zero() -> None:
+    """-200 then +200 leaves the balance where it was, so the chain would show no break."""
+    with pytest.raises(ValueError):
+        gap(_chain(-100, -200, 200, -300), start=1, length=2)
+
+
+def test_fork_restates_one_amount_and_shifts_every_later_balance() -> None:
+    rows = _chain(-100, -200, -300, -400)
+    forked = fork(rows, index=1, amount_cents=-250)
+
+    assert forked[0] == rows[0]
+    assert forked[1] == replace(
+        rows[1], amount_cents=-250, balance_after_cents=rows[1].balance_after_cents - 50
+    )
+    for original, shifted in zip(rows[2:], forked[2:], strict=True):
+        assert shifted == replace(
+            original,
+            balance_before_cents=original.balance_before_cents - 50,
+            balance_after_cents=original.balance_after_cents - 50,
+        )
+    _assert_chained(forked)
+
+
+@pytest.mark.parametrize("amount_cents", [-200, 0], ids=["unchanged", "zero"])
+def test_fork_rejects_a_restatement_that_is_not_one(amount_cents: int) -> None:
+    with pytest.raises(ValueError):
+        fork(_chain(-100, -200, -300), index=1, amount_cents=amount_cents)
+
+
+def test_cosmetic_changes_the_raw_text_but_not_the_normalized() -> None:
+    rows = _chain(-100, -200, -300)
+    rows[1] = replace(rows[1], description="BEA, Google Pay  ALBERT HEIJN 1234,PAS410")
+    mutated = cosmetic(rows, index=1)
+
+    assert mutated[1].description != rows[1].description
+    assert normalize_text(mutated[1].description) == normalize_text(rows[1].description)
+    assert mutated[1] == replace(rows[1], description=mutated[1].description)
+    assert (mutated[0], mutated[2]) == (rows[0], rows[2])
+
+
+def test_cosmetic_changes_an_already_upper_case_description() -> None:
+    rows = _chain(-100, -200, -300)
+    rows[1] = replace(rows[1], description="ALBERT HEIJN")
+    assert cosmetic(rows, index=1)[1].description != "ALBERT HEIJN"
+
+
+def test_reword_changes_the_normalized_text() -> None:
+    rows = _chain(-100, -200, -300)
+    mutated = reword(rows, index=1, description="Jumbo Amsterdam")
+    assert mutated == [rows[0], replace(rows[1], description="Jumbo Amsterdam"), rows[2]]
+
+
+def test_reword_rejects_a_change_that_is_only_cosmetic() -> None:
+    rows = _chain(-100, -200, -300)
+    with pytest.raises(ValueError):
+        reword(rows, index=1, description=f"  {rows[1].description.upper()}  ")
+
+
+def test_overlap_splits_into_two_files_that_share_rows() -> None:
+    rows = _chain(-100, -200, -300, -400, -500)
+    first, second = overlap(rows, first_end=3, second_start=1)
+    assert (first, second) == (rows[:3], rows[1:])
+
+
+@pytest.mark.parametrize(
+    ("first_end", "second_start"),
+    [
+        (2, 2),  # adjacent: nothing shared
+        (2, 3),  # a hole between them
+        (6, 1),  # first file runs past the rows
+        (3, -1),  # negative index
+    ],
+)
+def test_overlap_rejects_ranges_that_do_not_overlap(first_end: int, second_start: int) -> None:
+    with pytest.raises(ValueError):
+        overlap(
+            _chain(-100, -200, -300, -400, -500), first_end=first_end, second_start=second_start
+        )
+
+
+# Mutated files through the import endpoint: each fault is seen the way 2.4 reports it.
+
+
+async def test_a_gapped_file_opens_one_gap_and_the_full_file_closes_it(
+    client: AsyncClient, session: AsyncSession
+) -> None:
+    account = await make_account(session)
+    rows = list(generate(seed=21, count=200, start=START))
+
+    # Drop one whole day: a gap ending mid-day fills as a conflict, a known continuity bug.
+    day = rows[82].booked_on
+    start = next(i for i, row in enumerate(rows) if row.booked_on == day)
+    end = next(i for i, row in enumerate(rows) if row.booked_on > day)
+
+    gapped = gap(rows, start=start, length=end - start)
+    first = await _upload(client, account.id, list(render(gapped)))
+    assert first.status_code == 200
+    assert first.json()["gaps_opened"] == [
+        {
+            "transaction_id": ANY,
+            "booked_on": rows[end].booked_on.isoformat(),
+            "import_batch_id": first.json()["batch_id"],
+            "expected_before_cents": rows[start - 1].balance_after_cents,
+            "actual_before_cents": rows[end].balance_before_cents,
+        }
+    ]
+
+    second = await _upload(client, account.id, list(render(rows)))
+    assert second.status_code == 200
+    assert second.json()["inserted"] == end - start
+    assert second.json()["gaps_closed"] == first.json()["gaps_opened"]
+    assert second.json()["gaps_opened"] == []
+
+
+async def test_a_forked_file_is_a_conflict_and_writes_nothing(
+    client: AsyncClient, session: AsyncSession
+) -> None:
+    account = await make_account(session)
+    account_id = account.id
+    rows = list(generate(seed=22, count=200, start=START))
+    restated = rows[120].amount_cents - 1_000
+
+    assert (await _upload(client, account_id, list(render(rows)))).status_code == 200
+    second = await _upload(
+        client, account_id, list(render(fork(rows, index=120, amount_cents=restated)))
+    )
+
+    assert second.status_code == 409
+    assert second.json()["detail"]["conflicts"] != []
+    stored = await session.scalar(
+        select(func.count()).select_from(Transaction).where(Transaction.account_id == account_id)
+    )
+    assert stored == 200
+
+
+async def test_overlapping_files_import_each_row_once_with_no_gaps(
+    client: AsyncClient, session: AsyncSession
+) -> None:
+    account = await make_account(session)
+    account_id = account.id
+    rows = list(generate(seed=23, count=200, start=START))
+    first, second = overlap(rows, first_end=120, second_start=80)
+
+    assert (await _upload(client, account_id, list(render(first)))).status_code == 200
+    response = await _upload(client, account_id, list(render(second)))
+
+    assert response.status_code == 200
+    assert response.json()["inserted"] == 80
+    assert response.json()["gaps_opened"] == []
+    assert await chain_breaks(session, account_id) == []

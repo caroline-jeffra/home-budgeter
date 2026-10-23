@@ -3,11 +3,11 @@
 import csv
 import io
 import random
-from collections.abc import Iterable, Iterator
-from dataclasses import dataclass
+from collections.abc import Iterable, Iterator, Sequence
+from dataclasses import dataclass, replace
 from datetime import date, timedelta
 
-from app.ingest import ABN_AMRO, ImportProfile
+from app.ingest import ABN_AMRO, ImportProfile, normalize_text
 
 ACCOUNT_NUMBER = "12345678"
 HEADER = (
@@ -94,3 +94,64 @@ def render(rows: Iterable[SynthRow], profile: ImportProfile = ABN_AMRO) -> Itera
             ),
             profile.delimiter,
         )
+
+
+def gap(rows: Sequence[SynthRow], start: int, length: int) -> list[SynthRow]:
+    """Drop `length` rows from `start`, leaving one break where the chain resumes."""
+    if length < 1 or start < 1 or start + length >= len(rows):
+        raise ValueError(
+            f"a gap needs rows on both sides: start={start}, length={length}, rows={len(rows)}"
+        )
+    if sum(row.amount_cents for row in rows[start : start + length]) == 0:
+        raise ValueError("the dropped rows net to zero, so the chain would show no break")
+    return [*rows[:start], *rows[start + length :]]
+
+
+def fork(rows: Sequence[SynthRow], index: int, amount_cents: int) -> list[SynthRow]:
+    """Restate one amount and shift every later balance by the difference."""
+    original = rows[index]
+    if amount_cents in (0, original.amount_cents):
+        raise ValueError(f"restating {original.amount_cents} as {amount_cents} is not a fork")
+    shift = amount_cents - original.amount_cents
+    restated = replace(
+        original,
+        amount_cents=amount_cents,
+        balance_after_cents=original.balance_after_cents + shift,
+    )
+    later = [
+        replace(
+            row,
+            balance_before_cents=row.balance_before_cents + shift,
+            balance_after_cents=row.balance_after_cents + shift,
+        )
+        for row in rows[index + 1 :]
+    ]
+    return [*rows[:index], restated, *later]
+
+
+def _with_description(rows: Sequence[SynthRow], index: int, description: str) -> list[SynthRow]:
+    """A copy of `rows` with one description replaced."""
+    return [*rows[:index], replace(rows[index], description=description), *rows[index + 1 :]]
+
+
+def cosmetic(rows: Sequence[SynthRow], index: int) -> list[SynthRow]:
+    """Re-case and pad one description: different raw text, same normalized text."""
+    return _with_description(rows, index, f"{rows[index].description.upper()}    ")
+
+
+def reword(rows: Sequence[SynthRow], index: int, description: str) -> list[SynthRow]:
+    """Replace one description with text that normalizes differently: a real disagreement."""
+    if normalize_text(description) == normalize_text(rows[index].description):
+        raise ValueError(f"{description!r} only differs cosmetically from the original")
+    return _with_description(rows, index, description)
+
+
+def overlap(
+    rows: Sequence[SynthRow], first_end: int, second_start: int
+) -> tuple[list[SynthRow], list[SynthRow]]:
+    """Split rows into two files that share rows[second_start:first_end]."""
+    if not 0 <= second_start < first_end <= len(rows):
+        raise ValueError(
+            f"files ending at {first_end} and starting at {second_start} do not overlap"
+        )
+    return list(rows[:first_end]), list(rows[second_start:])
