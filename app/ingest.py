@@ -116,7 +116,7 @@ class ParsedRow:
 def open_text(raw: bytes, profile: ImportProfile) -> io.TextIOWrapper:
     """Pick the first encoding that decodes all of `raw`, then stream it line by line."""
     encoding = "utf-8-sig"
-    try:    
+    try:
         raw.decode(encoding)
     except UnicodeDecodeError:
         if profile.fallback_encoding is None:

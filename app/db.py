@@ -7,9 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from app.config import settings
 
 CONNECTION_TIMEOUTS = (
-    "-c lock_timeout=5s "
-    "-c statement_timeout=30s "
-    "-c idle_in_transaction_session_timeout=60s"
+    "-c lock_timeout=5s -c statement_timeout=30s -c idle_in_transaction_session_timeout=60s"
 )
 
 engine = create_async_engine(
