@@ -139,7 +139,7 @@ async def import_transactions(
     except UnicodeDecodeError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="File is neither UTF-8 nor {profile.fallback_encoding or 'a known fallback'}",
+            detail=f"File is neither UTF-8 nor {profile.fallback_encoding or 'a known fallback'}",
         ) from exc
 
     # Released at commit or rollback.
@@ -198,6 +198,12 @@ async def import_transactions(
                 "import. Nothing was imported; retry the upload."
             ),
         ) from exc
+    if summary.rows_read == 0:
+        await session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="File has no transactions",
+        )
 
     report = classify(
         before,

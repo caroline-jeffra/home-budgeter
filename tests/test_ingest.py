@@ -100,6 +100,13 @@ def test_parse_rejects_a_short_row() -> None:
         list(parse([HEADER, "12345678,EUR,20260807"], ABN_AMRO))
 
 
+def test_parse_rejects_a_file_with_the_wrong_delimiter() -> None:
+    """A semicolon export under a comma profile reads as one column, so the first row fails."""
+    lines = [line.replace(",", ";") for line in [HEADER, TRTP_LINE]]
+    with pytest.raises(ValueError, match="line 2: expected at least 8 columns, got 1"):
+        list(parse(lines, ABN_AMRO))
+
+
 # A test-only variant in the Dutch style: `1.234,56`, semicolon-delimited (P2-D6).
 DUTCH_STYLE = replace(ABN_AMRO, delimiter=";", decimal_separator=",", thousands_separator=".")
 
@@ -344,6 +351,24 @@ async def test_same_day_balance_revisit_is_imported(session: AsyncSession) -> No
 
     stored = (await session.scalars(select(Transaction).order_by(Transaction.line_no))).all()
     assert [t.occurrence for t in stored] == [0, 0, 1]
+
+
+async def test_identical_twins_at_different_balances_both_survive(session: AsyncSession) -> None:
+    """Two identical coffees on one day differ by their place in the balance chain (Path 1)."""
+    coffee = "12345678,EUR,20260810,20260810,{before},{after},-5.00,BEA Coffee Corner AMSTERDAM"
+    twins = [
+        HEADER,
+        coffee.format(before="100.00", after="95.00"),
+        coffee.format(before="95.00", after="90.00"),
+    ]
+    account = await make_account(session, bank_name="abn_amro")
+    batch = await make_import_batch(session, account)
+
+    summary = await import_rows(session, account, twins, import_batch_id=batch.id)
+
+    assert summary == ImportSummary(rows_read=2, inserted=2)
+    stored = (await session.scalars(select(Transaction).order_by(Transaction.line_no))).all()
+    assert [(t.balance_after_cents, t.occurrence) for t in stored] == [(9500, 0), (9000, 0)]
 
 
 async def test_reimport_matches_across_batches(session: AsyncSession) -> None:
@@ -647,6 +672,32 @@ async def test_import_undecodable_file_is_400(client: AsyncClient, session: Asyn
     )
 
     assert response.status_code == 400
+    assert response.json()["detail"] == "File is neither UTF-8 nor cp1252"
+    count = await session.scalar(
+        select(func.count()).select_from(ImportBatch).where(ImportBatch.account_id == account.id)
+    )
+    assert count == 0
+
+
+@pytest.mark.parametrize(
+    "body",
+    [b"", HEADER.encode(), f"{HEADER}\r\n\r\n".encode()],
+    ids=["empty", "header_only", "header_and_blank_line"],
+)
+async def test_import_without_data_rows_is_400(
+    client: AsyncClient, session: AsyncSession, body: bytes
+) -> None:
+    """A file with no transactions is refused, and no batch row is kept for it."""
+    account = await make_account(session, bank_name="abn_amro")
+
+    response = await client.post(
+        f"/accounts/{account.id}/import",
+        files={"file": ("export.csv", io.BytesIO(body), "text/csv")},
+        headers=AUTH,
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "File has no transactions"
     count = await session.scalar(
         select(func.count()).select_from(ImportBatch).where(ImportBatch.account_id == account.id)
     )
