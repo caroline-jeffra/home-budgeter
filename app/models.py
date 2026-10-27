@@ -2,6 +2,7 @@
 
 import enum
 from datetime import date, datetime
+from typing import Any
 
 from sqlalchemy import (
     BigInteger,
@@ -12,6 +13,7 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 NAMING_CONVENTION = {
@@ -127,6 +129,18 @@ class ImportBatch(Base):
     real_disagreements: Mapped[int] = mapped_column(server_default="0")
     voided_at: Mapped[datetime | None]
     void_reason: Mapped[str | None]
+
+
+class IdempotencyKey(Base):
+    """A client-supplied Idempotency-Key and the response saved for it."""
+
+    __tablename__ = "idempotency_keys"
+
+    key: Mapped[str] = mapped_column(primary_key=True)
+    request_hash: Mapped[str]
+    status_code: Mapped[int | None]
+    response_body: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
 
 class Transaction(Base):

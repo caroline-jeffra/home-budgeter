@@ -5,7 +5,18 @@ from collections.abc import Sequence
 from datetime import date
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, FastAPI, File, HTTPException, Query, UploadFile, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    FastAPI,
+    File,
+    Header,
+    HTTPException,
+    Query,
+    UploadFile,
+    status,
+)
+from fastapi.responses import JSONResponse
 from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth import require_auth
 from app.continuity import chain_breaks, classify, overlap_window
 from app.db import get_session
+from app.idempotency import KeyReusedError, claim, record, request_hash
 from app.ingest import NORMALIZER_VERSION, PROFILES, import_rows, open_text
 from app.models import Account, BankName, Category, ImportBatch, Transaction, TransactionSplit
 from app.schemas import (
@@ -286,8 +298,25 @@ async def list_categories(session: Session) -> Sequence[Category]:
 
 
 @router.post("/transactions", response_model=TransactionRead, status_code=201)
-async def create_transaction(payload: TransactionCreate, session: Session) -> Transaction:
-    """Creates a transaction and its single full-amount split in one unit of work."""
+async def create_transaction(
+    payload: TransactionCreate,
+    session: Session,
+    idempotency_key: Annotated[str | None, Header(min_length=1, max_length=255)] = None,
+) -> TransactionRead | JSONResponse:
+    """Creates a transaction and its full-amount split; a repeated Idempotency-Key replays."""
+    if idempotency_key is not None:
+        try:
+            saved = await claim(session, idempotency_key, request_hash(payload))
+        except KeyReusedError as exc:
+            await session.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="Idempotency-Key was already used with a different request",
+            ) from exc
+        if saved is not None:
+            await session.rollback()
+            return JSONResponse(status_code=saved.status_code, content=saved.body)
+
     transaction = Transaction(
         **payload.model_dump(),
         raw_description=payload.description,
@@ -304,6 +333,11 @@ async def create_transaction(payload: TransactionCreate, session: Session) -> Tr
                 amount_cents=transaction.amount_cents,
             )
         )
+        created = TransactionRead.model_validate(transaction)
+        if idempotency_key is not None:
+            await record(
+                session, idempotency_key, status.HTTP_201_CREATED, created.model_dump(mode="json")
+            )
 
         await session.commit()
     except IntegrityError as exc:
@@ -312,8 +346,7 @@ async def create_transaction(payload: TransactionCreate, session: Session) -> Tr
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Unknown account_id or category_id",
         ) from exc
-    await session.refresh(transaction)
-    return transaction
+    return created
 
 
 @router.get("/transactions", response_model=list[TransactionRead])
