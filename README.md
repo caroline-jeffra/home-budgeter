@@ -12,6 +12,60 @@ Home Budgeter is a household budgeting API for a single household user. Transact
 
 This project came out of a budgeting practice my family uses which has been useful for maintaining good spending habits but had become prohibitively time consuming. Building an API to improve automation and reduce the monthly time commitment devoted to budgeting will mean that we can continue with these good habits while reducing the cognitive load and time commitment it currently represents.
 
+## Ingestion
+
+Transactions are ingested by merging a bank's CSV export against what is already stored for that account. Uploading the same file twice changes nothing, rows already stored are skipped, and an import whose balances disagree with stored rows is rejected wholesale rather than half-applied.
+
+Bank exports are messy in predictable ways: consecutive downloads overlap, the same file gets downloaded twice, a missed month leaves a hole, and a bank occasionally restates history so an old row comes back with different figures. Ingestion has a defined answer for each of these.
+
+### The dedup key
+
+Each row is matched against stored rows by a key made of booking date, balance after the transaction, amount, and occurrence, scoped to the account.
+
+- Date and amount alone are not unique: two 3.50€ coffees on the same day would collapse into one.
+- Balance after separates them: the first coffee leaves 96.50€, the second 93.00€, so both survive. The running balance is the bank's own record of order, and every row's `start balance + amount == end balance` is checked when the file is parsed.
+- Occurrence covers the rare case the balance alone cannot: a refund and a purchase that return the balance to the same value on the same day for the same amount. It is the row's position among rows in the same file that share date, balance and amount.
+
+The description is deliberately not part of the key, because banks reword descriptions between exports (see Descriptions below).
+
+Banks that export no running balance are not supported yet; their import fails loudly rather than deduplicating on a weaker key.
+
+### Overlaps, gaps and conflicts
+
+The account's imported rows form a balance chain: each row's opening balance should equal the previous row's closing balance. A break in that chain is how the system knows something is missing or wrong.
+
+| Case | What it is | How it is detected | What the import does |
+| --- | --- | --- | --- |
+| Duplicate file | The exact same file uploaded again | File hash matches a stored batch | Returns the original batch with `already_imported: true`; nothing is written |
+| Overlap | The end of one export repeats the start of the next | Rows match stored rows on the dedup key | Skips the matched rows, imports only the new ones |
+| Gap | Rows missing between two imports, e.g. a skipped month | A new chain break outside the dates already stored | Imports the file and reports the break in `gaps_opened` |
+| Gap filled | A later file supplies the missing rows | A previous chain break disappears | Imports the rows and reports the break in `gaps_closed` |
+| Conflict | The file disagrees with stored rows on dates they share, e.g. a restated row | A new chain break dated inside the overlap with stored rows | Rejects the whole file with `409`; nothing is imported |
+
+Gaps are not errors: the import succeeds, and `GET /accounts/{id}/reconciliation` lists every gap still open. Conflicts are never stored. To accept the bank's restated version, void the stored batch (`python -m app.cli void <batch_id> --reason "..."`) and import the new file.
+
+### Descriptions
+
+When an incoming row matches a stored row on the dedup key, their descriptions are compared:
+
+- **Exact**: the raw text is identical.
+- **Cosmetic**: the text differs only in case, spacing, noise words or reference numbers, so it is identical once normalized. These are counted in `cosmetic_matches`.
+- **Real**: the text genuinely differs. These are listed in `disagreements` with both versions.
+
+Neither kind blocks the import, and the stored row is never overwritten. The key already proved it is the same transaction; the description difference is reported so a person can look.
+
+### Raw vs normalized
+
+Every row keeps the bank's `raw_description` exactly as exported, alongside the normalized text used for matching and categorizing, and the `normalizer_version` that produced it. Normalization (Unicode NFC, case folding, dropping noise words and digit runs) can be improved later and rows re-normalized from the raw text, without re-importing anything.
+
+### Idempotency keys
+
+The file hash makes uploading a file safe to repeat. Manual writes get the same protection from an `Idempotency-Key` header on `POST /transactions`: a retry with the same key and body replays the saved response instead of creating a second transaction, and reusing a key with a different body is rejected with `422`.
+
+### No fuzzy matching
+
+Rows match exactly on the dedup key or not at all. A fuzzy match would occasionally merge two real transactions, silently and in a way that is hard to find later. An exact key plus a reported disagreement keeps every decision visible and leaves the judgment calls to a person.
+
 ## Milestones
 
 Two milestones are planned, dividing API from frontend. A discarded test spike has already settled the basic product requirements, which allows for full focus on creating a full featured API to support a polished frontend later on. 
@@ -19,26 +73,6 @@ Two milestones are planned, dividing API from frontend. A discarded test spike h
 **Milestone 1** is the deployed API with OpenAPI docs as the interface. This favors building a complete working backend over making an abbreviated but usable frontend + backend.
 
 **Milestone 2** is a friendly frontend UI for household use on multiple device types. This milestone delivers a household-usable application. 
-
-## Out of Scope
-
-A number of features are currently out of scope of the core project. These fall into one of two categories: cut, or deferred.
-
-### Cut
-
-- Bank API Integrations
-- Forecasting/Charts
-- Receipts
-- Multi-currency
-- ML/fuzzy matching
-- PDF statement parsing 
-
-### Deferred
-
-- Transaction splitting: This will allow cash withdrawals and multi-category transactions to have subtotals be attributed to differing categories. A withdrawal to buy fruit at the market and pay a babysitter could be categorized as Groceries (10€) and Childcare (30€).
-- Hierarchical categories: Budgeting might be set at the Category level, or derived from the totals of constituent Subcategories. 
-- Import profiles: The structure of transaction download can differ from one institution to another, and creating an import profile to select as those transactions are loaded will be a quality of life improvement. Not strictly necessary for the first Milestone as our household banks with a single institution.
-- Rule derivation from corrections: When suggested categories are incorrect, deriving a rule from that correction will be a time saver, making it worth scheduling after Milestone 1 is complete.
 
 ## Authentication
 
